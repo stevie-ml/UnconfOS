@@ -1,14 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, useNavigate, useParams, Link } from 'react-router-dom';
+import React, { useState, useEffect, useMemo } from 'react';
+import { BrowserRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom';
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, push, onValue, update, get } from "firebase/database";
-import { Plus, Users, Clock, MapPin, Calendar, Share2, Settings, Trash2 } from 'lucide-react';
+import { getDatabase, ref, push, onValue, update } from "firebase/database";
+import { Plus, Users, Settings, Trash2, Share2, Calendar, X } from 'lucide-react';
 
 // --- CONFIGURATION ---
-// PASTE YOUR FIREBASE CONFIG HERE
+// I have pre-filled your keys here to avoid copy-paste errors
 const firebaseConfig = {
-
-// --- CONFIGURATION ---
   apiKey: "AIzaSyDC5uHKlOdIHCFWZNbNqIoTaxNLKF1ZsI",
   authDomain: "second-order-schedule.firebaseapp.com",
   databaseURL: "https://second-order-schedule-default-rtdb.firebaseio.com",
@@ -17,21 +15,23 @@ const firebaseConfig = {
   messagingSenderId: "862005260010",
   appId: "1:862005260010:web:5dd8b581485dc1ef8db193",
   measurementId: "G-5D7CWV70H0"
-
 };
 
+// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
 // --- HELPER FUNCTIONS ---
-const generateDateRange = (start, end) => {
-  const dates = [];
-  let current = new Date(start);
-  current.setMinutes(current.getMinutes() + current.getTimezoneOffset());
-  const endDate = new Date(end);
-  endDate.setMinutes(endDate.getMinutes() + endDate.getTimezoneOffset());
 
-  while (current <= endDate) {
+// Safer date generator that handles timezones better
+const generateDateRange = (startStr, endStr) => {
+  if (!startStr || !endStr) return [];
+  const dates = [];
+  // Append T12:00:00 to avoid timezone rolling backwards
+  let current = new Date(startStr + "T12:00:00");
+  const end = new Date(endStr + "T12:00:00");
+
+  while (current <= end) {
     dates.push(current.toDateString());
     current.setDate(current.getDate() + 1);
   }
@@ -51,6 +51,9 @@ const generateTimeSlots = (startHour = 9, endHour = 22) => {
   return slots;
 };
 
+// Sanitize keys for Firebase (no . $ # [ ])
+const safeKey = (str) => str.replace(/[.#$[\]]/g, "");
+
 // --- COMPONENTS ---
 
 // 1. LANDING PAGE
@@ -65,6 +68,11 @@ const CreateEvent = () => {
 
   const handleCreate = async (e) => {
     e.preventDefault();
+    if (!formData.startDate || !formData.endDate) {
+      alert("Please select dates");
+      return;
+    }
+
     const eventsRef = ref(db, 'events');
     const newEventRef = await push(eventsRef, {
       config: {
@@ -125,12 +133,11 @@ const EventGrid = () => {
   
   // Drag Selection State
   const [isDragging, setIsDragging] = useState(false);
-  const [selectionStart, setSelectionStart] = useState(null); // { timeIndex, room }
-  const [selectionEnd, setSelectionEnd] = useState(null); // { timeIndex, room }
+  const [selectionStart, setSelectionStart] = useState(null); 
+  const [selectionEnd, setSelectionEnd] = useState(null); 
   
   // Modal State
   const [modalOpen, setModalOpen] = useState(false);
-  const [editingSession, setEditingSession] = useState(null); // If editing existing
   const [tempData, setTempData] = useState({ title: "", host: "", description: "" });
   const [showRoomModal, setShowRoomModal] = useState(false);
   const [newRoomName, setNewRoomName] = useState("");
@@ -140,11 +147,14 @@ const EventGrid = () => {
     const eventRef = ref(db, `events/${eventId}`);
     const unsubscribe = onValue(eventRef, (snapshot) => {
       const data = snapshot.val();
-      if (data) {
+      if (data && data.config) {
         setEventData(data);
         const generatedDates = generateDateRange(data.config.startDate, data.config.endDate);
         setDates(generatedDates);
-        if (!selectedDay) setSelectedDay(generatedDates[0]);
+        // Only set selected day if not already set or invalid
+        if (!selectedDay || !generatedDates.includes(selectedDay)) {
+           if(generatedDates.length > 0) setSelectedDay(generatedDates[0]);
+        }
       }
     });
     return () => unsubscribe();
@@ -152,27 +162,28 @@ const EventGrid = () => {
 
   // Derived Data (Time Slots)
   const timeSlots = useMemo(() => {
-    if (!eventData) return [];
+    if (!eventData || !eventData.config) return [];
     return generateTimeSlots(eventData.config.startHour || 8, eventData.config.endHour || 24);
   }, [eventData]);
 
   // Derived Data (Processed Grid for RowSpans)
   const gridLayout = useMemo(() => {
-    if (!eventData || !selectedDay) return {};
+    if (!eventData || !selectedDay || !eventData.schedule) return {};
     const map = {};
-    const schedule = eventData.schedule || {};
+    const schedule = eventData.schedule;
 
-    // 1. Place all sessions
     Object.keys(schedule).forEach(key => {
-      const [day, time, room] = key.split('::');
+      const parts = key.split('::');
+      if (parts.length < 3) return;
+      const [day, time, room] = parts;
+      
       if (day !== selectedDay) return;
       
       const session = schedule[key];
       const timeIndex = timeSlots.indexOf(time);
       if (timeIndex === -1) return;
 
-      // Calculate span (duration / 15 mins)
-      const duration = session.duration || 60; // default to 60 if missing
+      const duration = session.duration || 60;
       const span = Math.ceil(duration / 15);
 
       if (!map[room]) map[room] = {};
@@ -193,7 +204,6 @@ const EventGrid = () => {
   // --- HANDLERS ---
 
   const handleMouseDown = (timeIndex, room) => {
-    // Only allow drag on empty slots
     if (gridLayout[room]?.[timeIndex]) return; 
     setIsDragging(true);
     setSelectionStart({ timeIndex, room });
@@ -213,15 +223,16 @@ const EventGrid = () => {
   };
 
   const saveSession = () => {
-    if (!tempData.title) return;
+    if (!tempData.title || !selectionStart || !selectionEnd) return;
     
-    // Calculate start time and duration
     const startIdx = Math.min(selectionStart.timeIndex, selectionEnd.timeIndex);
     const endIdx = Math.max(selectionStart.timeIndex, selectionEnd.timeIndex);
     const duration = (endIdx - startIdx + 1) * 15;
     const startTime = timeSlots[startIdx];
+    const room = selectionStart.room;
 
-    const slotId = `${selectedDay}::${startTime}::${selectionStart.room}`;
+    // Use safeKey to prevent Firebase errors
+    const slotId = `${selectedDay}::${startTime}::${safeKey(room)}`;
     
     const newSession = { 
       ...tempData, 
@@ -232,7 +243,6 @@ const EventGrid = () => {
     const newSchedule = { ...(eventData.schedule || {}), [slotId]: newSession };
     update(ref(db, `events/${eventId}`), { schedule: newSchedule });
     setModalOpen(false);
-    setEditingSession(null);
   };
 
   const handleDeleteSession = (key) => {
@@ -244,13 +254,14 @@ const EventGrid = () => {
 
   const handleAddRoom = () => {
     if (!newRoomName) return;
-    const newRooms = [...(eventData.config.rooms || []), newRoomName];
+    const currentRooms = eventData.config.rooms || [];
+    const newRooms = [...currentRooms, safeKey(newRoomName)];
     update(ref(db, `events/${eventId}/config`), { rooms: newRooms });
     setNewRoomName("");
   };
 
   const handleDeleteRoom = (roomToDelete) => {
-    if(!window.confirm(`Delete room "${roomToDelete}"? This will hide sessions in this room.`)) return;
+    if(!window.confirm(`Delete room "${roomToDelete}"?`)) return;
     const newRooms = eventData.config.rooms.filter(r => r !== roomToDelete);
     update(ref(db, `events/${eventId}/config`), { rooms: newRooms });
   };
@@ -260,28 +271,28 @@ const EventGrid = () => {
     update(ref(db, `events/${eventId}/schedule/${key}`), { rsvps: (session.rsvps || 0) + 1 });
   };
 
-  if (!eventData) return <div className="p-10 text-center animate-pulse">Loading UnconfOS...</div>;
+  if (!eventData) return <div className="p-10 text-center text-slate-500">Loading Event Data...</div>;
+
+  // Safe access to rooms
+  const rooms = eventData.config.rooms || [];
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col">
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm">
         <div className="max-w-full px-4 py-3 flex justify-between items-center">
-          <div>
-            <h1 className="text-xl font-bold text-slate-800">{eventData.config.name}</h1>
+          <div className="flex flex-col gap-2">
+            <h1 className="text-xl font-bold text-slate-800 leading-none">{eventData.config.name}</h1>
             <div className="flex gap-2 text-xs text-slate-500 overflow-x-auto max-w-[200px] md:max-w-none no-scrollbar">
-              {dates.map(day => {
-                const isSelected = selectedDay === day;
-                return (
-                  <button 
-                    key={day} 
-                    onClick={() => setSelectedDay(day)}
-                    className={`whitespace-nowrap px-2 py-1 rounded transition-colors ${isSelected ? 'bg-slate-800 text-white font-bold' : 'hover:bg-slate-100'}`}
-                  >
-                    {day.split(' ').slice(0, 3).join(' ')}
-                  </button>
-                )
-              })}
+              {dates.map(day => (
+                <button 
+                  key={day} 
+                  onClick={() => setSelectedDay(day)}
+                  className={`whitespace-nowrap px-2 py-1 rounded transition-colors ${selectedDay === day ? 'bg-slate-800 text-white font-bold' : 'hover:bg-slate-100 bg-slate-50'}`}
+                >
+                  {day.split(' ').slice(0, 3).join(' ')}
+                </button>
+              ))}
             </div>
           </div>
           <div className="flex gap-2">
@@ -299,14 +310,14 @@ const EventGrid = () => {
       </header>
 
       {/* Main Grid */}
-      <main className="flex-1 overflow-auto bg-white relative select-none">
+      <main className="flex-1 overflow-auto bg-white relative select-none pb-20">
         <table className="w-full border-collapse">
           <thead>
             <tr>
               <th className="sticky top-0 left-0 z-40 bg-slate-50 border-b border-r w-16 min-w-[4rem] text-center text-xs font-medium text-slate-400 py-2">
                 Time
               </th>
-              {eventData.config.rooms.map(room => (
+              {rooms.map(room => (
                 <th key={room} className="sticky top-0 z-30 bg-slate-50 border-b border-r min-w-[160px] text-xs font-bold text-slate-600 uppercase tracking-wider py-2 px-2 text-left">
                   {room}
                 </th>
@@ -324,13 +335,11 @@ const EventGrid = () => {
                   </td>
 
                   {/* Room Columns */}
-                  {eventData.config.rooms.map(room => {
+                  {rooms.map(room => {
                     const cellData = gridLayout[room]?.[tIndex];
                     
-                    // If this slot is blocked by a session above, render nothing
                     if (cellData?.type === 'body') return null;
 
-                    // If this is the start of a session
                     if (cellData?.type === 'head') {
                       const { data, span, key } = cellData;
                       return (
@@ -340,7 +349,7 @@ const EventGrid = () => {
                           className="p-1 border-r border-b border-slate-100 relative group align-top"
                         >
                           <div className="h-full w-full bg-blue-100/50 hover:bg-blue-100 border-l-4 border-blue-500 rounded-r shadow-sm p-2 flex flex-col justify-between overflow-hidden relative">
-                             <div className="absolute right-1 top-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-white/50 rounded">
+                             <div className="absolute right-1 top-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-white/50 rounded z-10">
                                <button onClick={() => handleDeleteSession(key)} className="p-1 hover:text-red-600"><Trash2 size={12}/></button>
                              </div>
                              <div>
@@ -348,7 +357,7 @@ const EventGrid = () => {
                                <div className="text-xs text-blue-700">{data.host} • {data.duration}m</div>
                              </div>
                              <div className="mt-1 pt-1 border-t border-blue-200/50 flex justify-between items-center">
-                               <button onClick={() => handleRSVP(key)} className="text-[10px] flex items-center gap-1 bg-white/50 px-1.5 rounded hover:bg-white text-blue-800">
+                               <button onClick={() => handleRSVP(key)} className="text-[10px] flex items-center gap-1 bg-white/50 px-1.5 rounded hover:bg-white text-blue-800 z-10">
                                  <Users size={10}/> {data.rsvps}
                                </button>
                              </div>
@@ -374,7 +383,6 @@ const EventGrid = () => {
                           ${isSelected ? 'bg-blue-200' : 'hover:bg-slate-50'}
                         `}
                       >
-                         {/* Visual helper for "Add" on hover */}
                          {!isDragging && (
                            <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 pointer-events-none">
                              <Plus size={14} className="text-slate-300"/>
@@ -391,7 +399,7 @@ const EventGrid = () => {
       </main>
 
       {/* New Session Modal */}
-      {modalOpen && (
+      {modalOpen && selectionStart && selectionEnd && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-6">
             <h3 className="font-bold text-lg mb-1">Create Session</h3>
@@ -426,7 +434,7 @@ const EventGrid = () => {
             </div>
             
             <div className="space-y-2 mb-6 max-h-[50vh] overflow-y-auto">
-              {eventData.config.rooms.map(r => (
+              {rooms.map(r => (
                 <div key={r} className="flex justify-between items-center bg-slate-50 p-2 rounded border">
                   <span className="font-medium text-sm">{r}</span>
                   <button onClick={() => handleDeleteRoom(r)} className="text-slate-400 hover:text-red-500 p-1">
