@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom';
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, push, onValue, update } from "firebase/database";
@@ -20,7 +20,8 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
 // --- CONSTANTS ---
-const PX_PER_MIN = 2; 
+// Increased scale: 3 pixels per minute = 45px per 15-min slot
+const PX_PER_MIN = 3; 
 const SLOT_MINUTES = 15;
 
 // --- HELPERS ---
@@ -35,21 +36,29 @@ const formatTime = (minutes) => {
   return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
 };
 
+const formatDuration = (mins) => {
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
+};
+
+// High contrast opaque colors
 const COLORS = [
-  { bg: '#fee2e2', border: '#ef4444', text: '#7f1d1d' }, // Red
-  { bg: '#ffedd5', border: '#f97316', text: '#7c2d12' }, // Orange
-  { bg: '#fef9c3', border: '#eab308', text: '#713f12' }, // Yellow
-  { bg: '#dcfce7', border: '#22c55e', text: '#14532d' }, // Green
-  { bg: '#dbeafe', border: '#3b82f6', text: '#1e3a8a' }, // Blue
-  { bg: '#ede9fe', border: '#8b5cf6', text: '#5b21b6' }, // Violet
-  { bg: '#fae8ff', border: '#d946ef', text: '#701a75' }, // Fuchsia
-  { bg: '#fce7f3', border: '#db2777', text: '#831843' }, // Pink
-  { bg: '#f1f5f9', border: '#64748b', text: '#0f172a' }, // Slate
-  { bg: '#ccfbf1', border: '#14b8a6', text: '#134e4a' }, // Teal
+  { bg: '#fecaca', border: '#b91c1c', text: '#7f1d1d' }, // Red
+  { bg: '#fed7aa', border: '#c2410c', text: '#7c2d12' }, // Orange
+  { bg: '#fde68a', border: '#b45309', text: '#78350f' }, // Amber
+  { bg: '#bbf7d0', border: '#15803d', text: '#14532d' }, // Green
+  { bg: '#bfdbfe', border: '#1d4ed8', text: '#1e3a8a' }, // Blue
+  { bg: '#ddd6fe', border: '#6d28d9', text: '#5b21b6' }, // Violet
+  { bg: '#f5d0fe', border: '#c026d3', text: '#701a75' }, // Fuchsia
+  { bg: '#fbcfe8', border: '#be185d', text: '#831843' }, // Pink
+  { bg: '#99f6e4', border: '#0f766e', text: '#134e4a' }, // Teal
 ];
 
 const getHostColor = (name) => {
-  if (!name) return COLORS[8]; // Default Slate
+  if (!name) return { bg: '#e2e8f0', border: '#64748b', text: '#1e293b' }; // Slate
   let hash = 0;
   for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
   return COLORS[Math.abs(hash) % COLORS.length];
@@ -80,7 +89,7 @@ const CreateEvent = () => {
     if (!formData.startDate || !formData.endDate) { alert("Please select dates"); return; }
     const eventsRef = ref(db, 'events');
     const newEventRef = await push(eventsRef, {
-      config: { ...formData, startHour: 8, endHour: 24 }, // Default config
+      config: { ...formData, startHour: 8, endHour: 24 },
       schedule: {}
     });
     navigate(`/event/${newEventRef.key}`);
@@ -89,7 +98,7 @@ const CreateEvent = () => {
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-xl shadow-lg p-8">
-        <h1 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2"><Calendar className="text-blue-600"/> UnconfOS v4.0</h1>
+        <h1 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2"><Calendar className="text-blue-600"/> UnconfOS v5.0</h1>
         <form onSubmit={handleCreate} className="space-y-4">
           <div><label className="block text-sm font-medium mb-1">Event Name</label><input required className="w-full p-2 border rounded" placeholder="e.g. Retreat" onChange={e => setFormData({...formData, name: e.target.value})} /></div>
           <div className="grid grid-cols-2 gap-4">
@@ -143,31 +152,30 @@ const EventGrid = () => {
   const totalHeight = (endHour - startHour) * 60 * PX_PER_MIN;
 
   const handleCanvasMouseDown = (e, room) => {
-    // Only left click
-    if (e.button !== 0) return;
+    if (e.button !== 0) return; // Only left click
     
-    // Calculate minutes from top of room column
+    // Get Y relative to container top (scrolling is handled by container)
     const rect = e.currentTarget.getBoundingClientRect();
-    const y = e.clientY - rect.top + e.currentTarget.scrollTop;
-    const minutes = Math.floor(y / PX_PER_MIN) + dayStartMinutes;
+    const y = e.clientY - rect.top; 
     
-    // Snap to 15m
+    const minutes = Math.floor(y / PX_PER_MIN) + dayStartMinutes;
     const snapped = Math.floor(minutes / 15) * 15;
     
     setIsDragging(true);
     setDragRoom(room);
     setDragStartMin(snapped);
-    setDragCurrentMin(snapped + 15); // Default 15m duration
+    setDragCurrentMin(snapped + 15);
   };
 
   const handleCanvasMouseMove = (e) => {
     if (!isDragging) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const y = e.clientY - rect.top; // Relative to viewport/container
+    const y = e.clientY - rect.top;
+    
     const minutes = Math.floor(y / PX_PER_MIN) + dayStartMinutes;
+    // Snap to nearest 15m block above the mouse
     const snapped = Math.ceil(minutes / 15) * 15;
     
-    // Ensure we don't drag backwards past start
     if (snapped > dragStartMin) {
       setDragCurrentMin(snapped);
     }
@@ -223,12 +231,8 @@ const EventGrid = () => {
 
   if (!eventData) return <div className="p-10 text-center">Loading...</div>;
   const rooms = eventData.config.rooms || [];
-
-  // Generate Hour Markers
   const hourMarkers = [];
-  for (let h = startHour; h < endHour; h++) {
-    hourMarkers.push(h);
-  }
+  for (let h = startHour; h < endHour; h++) hourMarkers.push(h);
 
   return (
     <div className="min-h-screen bg-white text-slate-900 font-sans flex flex-col h-screen overflow-hidden" onMouseUp={handleMouseUp}>
@@ -267,20 +271,20 @@ const EventGrid = () => {
           {rooms.map(room => (
             <div 
               key={room} 
-              className="flex-1 min-w-[150px] border-r relative bg-slate-50/30 group"
+              className="flex-1 min-w-[150px] border-r relative bg-slate-50/20 group"
               onMouseDown={(e) => handleCanvasMouseDown(e, room)}
               onMouseMove={handleCanvasMouseMove}
             >
-              {/* Header */}
+              {/* Room Header */}
               <div className="sticky top-0 bg-white/95 backdrop-blur border-b z-30 p-2 text-center text-sm font-bold text-slate-700 uppercase tracking-wide">
                 {room}
               </div>
 
-              {/* Background Lines */}
+              {/* Grid Lines */}
               {hourMarkers.map(h => (
-                <div key={h} className="absolute w-full border-t border-slate-200" style={{ top: (h * 60 - dayStartMinutes) * PX_PER_MIN }}></div>
+                <div key={h} className="absolute w-full border-t border-slate-300" style={{ top: (h * 60 - dayStartMinutes) * PX_PER_MIN }}></div>
               ))}
-              {/* 15m lines (faint) */}
+              {/* 15m lines */}
               {hourMarkers.map(h => [15,30,45].map(m => (
                  <div key={`${h}-${m}`} className="absolute w-full border-t border-slate-100" style={{ top: ((h * 60 + m) - dayStartMinutes) * PX_PER_MIN }}></div>
               )))}
@@ -292,33 +296,37 @@ const EventGrid = () => {
                   const [_, timeStr] = key.split('::');
                   const startMin = getMinutes(timeStr);
                   const top = (startMin - dayStartMinutes) * PX_PER_MIN;
-                  const height = (session.duration || 60) * PX_PER_MIN;
+                  const height = Number(session.duration || 60) * PX_PER_MIN; // Ensure Number
                   const styles = getHostColor(session.host);
                   
                   return (
                     <div 
                       key={key}
-                      onMouseDown={(e) => e.stopPropagation()} // Prevent dragging existing events
+                      onMouseDown={(e) => e.stopPropagation()} 
                       style={{ 
                         top: `${top}px`, 
-                        height: `${Math.max(height, 20)}px`, // Min height safety
+                        height: `${Math.max(height, 30)}px`,
                         backgroundColor: styles.bg,
                         borderColor: styles.border,
                         color: styles.text,
+                        zIndex: 10
                       }}
-                      className="absolute left-1 right-1 border-l-4 rounded p-2 text-xs flex flex-col justify-between shadow-sm z-10 overflow-hidden hover:z-20 hover:shadow-md transition-shadow cursor-default"
+                      className="absolute left-1 right-1 border-l-4 rounded p-2 text-xs flex flex-col justify-between shadow-md overflow-hidden cursor-default transition-transform hover:scale-[1.01]"
                     >
                       <div className="flex justify-between items-start">
-                        <span className="font-bold leading-tight">{session.title}</span>
-                        <button onClick={() => handleDeleteSession(key)} className="hover:text-red-600 p-0.5"><Trash2 size={12}/></button>
+                        <span className="font-bold leading-tight text-sm">{session.title}</span>
+                        <div className="flex flex-col items-end gap-1">
+                           <span className="bg-white/40 px-1 rounded text-[10px] font-bold">{formatDuration(session.duration || 60)}</span>
+                           <button onClick={() => handleDeleteSession(key)} className="hover:bg-red-500 hover:text-white p-0.5 rounded"><Trash2 size={12}/></button>
+                        </div>
                       </div>
                       <div className="flex justify-between items-end mt-1">
                         <div className="flex flex-col">
-                           <span className="opacity-90 font-medium">{session.host}</span>
-                           <span className="opacity-75 text-[10px]">{formatTime(startMin)} - {formatTime(startMin + (session.duration || 60))}</span>
+                           <span className="font-bold opacity-90">{session.host}</span>
+                           <span className="opacity-75 text-[10px] flex items-center gap-1"><Clock size={10}/> {formatTime(startMin)} - {formatTime(startMin + (session.duration || 60))}</span>
                         </div>
-                        <button onClick={() => handleRSVP(key)} className={`flex items-center gap-1 px-1.5 py-0.5 rounded ${myRSVPs[key] ? 'bg-slate-900 text-white' : 'bg-white/60 hover:bg-white'}`}>
-                          {myRSVPs[key] ? <Check size={10}/> : <Users size={10}/>} {session.rsvps || 0}
+                        <button onClick={() => handleRSVP(key)} className={`flex items-center gap-1 px-2 py-1 rounded shadow-sm transition-colors ${myRSVPs[key] ? 'bg-slate-900 text-white' : 'bg-white hover:bg-gray-100'}`}>
+                          {myRSVPs[key] ? <Check size={12}/> : <Users size={12}/>} {session.rsvps || 0}
                         </button>
                       </div>
                     </div>
@@ -329,14 +337,14 @@ const EventGrid = () => {
               {/* Ghost Event (During Drag) */}
               {isDragging && dragRoom === room && (
                 <div 
-                  className="absolute left-1 right-1 bg-blue-500/20 border-l-4 border-blue-500 rounded p-2 z-20 pointer-events-none"
+                  className="absolute left-1 right-1 bg-blue-500/90 border-l-4 border-blue-700 rounded p-2 z-50 pointer-events-none shadow-xl text-white"
                   style={{
                     top: `${(dragStartMin - dayStartMinutes) * PX_PER_MIN}px`,
                     height: `${(dragCurrentMin - dragStartMin) * PX_PER_MIN}px`
                   }}
                 >
-                   <div className="text-blue-900 font-bold text-xs">New Session</div>
-                   <div className="text-blue-800 text-xs">{formatTime(dragStartMin)} - {formatTime(dragCurrentMin)}</div>
+                   <div className="font-bold text-sm">New Session</div>
+                   <div className="text-xs opacity-90">{formatDuration(dragCurrentMin - dragStartMin)}</div>
                 </div>
               )}
 
@@ -352,41 +360,9 @@ const EventGrid = () => {
             <h3 className="font-bold text-lg mb-4">Add Session</h3>
             <div className="mb-4 text-xs font-mono bg-slate-100 p-2 rounded text-center">
               {formatTime(dragStartMin)} - {formatTime(dragCurrentMin)} 
-              <span className="text-slate-500 ml-2">({dragCurrentMin - dragStartMin} min)</span>
+              <span className="font-bold ml-2">({formatDuration(dragCurrentMin - dragStartMin)})</span>
             </div>
             <input autoFocus className="w-full mb-3 p-2 border rounded" placeholder="Title" value={tempData.title} onChange={e => setTempData({...tempData, title: e.target.value})} />
             <input className="w-full mb-4 p-2 border rounded" placeholder="Host Name (Sets Color)" value={tempData.host} onChange={e => setTempData({...tempData, host: e.target.value})} />
             <div className="flex gap-2">
-              <button onClick={saveSession} className="flex-1 bg-slate-900 text-white py-2 rounded">Save</button>
-              <button onClick={() => setModalOpen(false)} className="flex-1 bg-slate-100 py-2 rounded">Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Room Modal */}
-      {showRoomModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-6">
-            <div className="flex justify-between mb-4"><h3 className="font-bold">Rooms</h3><button onClick={() => setShowRoomModal(false)}><X size={20}/></button></div>
-            <div className="space-y-2 mb-4 max-h-[40vh] overflow-y-auto">{rooms.map(r => (
-              <div key={r} className="flex justify-between p-2 bg-slate-50 rounded border"><span className="text-sm">{r}</span><button onClick={() => handleDeleteRoom(r)}><Trash2 size={14} className="text-red-400"/></button></div>
-            ))}</div>
-            <div className="flex gap-2"><input className="flex-1 p-2 border rounded text-sm" placeholder="New Room" value={newRoomName} onChange={e => setNewRoomName(e.target.value)} /><button onClick={handleAddRoom} className="bg-green-600 text-white px-3 rounded"><Plus/></button></div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default function App() {
-  return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<CreateEvent />} />
-        <Route path="/event/:eventId" element={<EventGrid />} />
-      </Routes>
-    </BrowserRouter>
-  );
-}
+              <button onClick={saveSession}
