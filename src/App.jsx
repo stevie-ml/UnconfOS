@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom';
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, push, onValue, update } from "firebase/database";
+import { getDatabase, ref, push, onValue, update, set } from "firebase/database";
 import { Users, Settings, Trash2, Share2, Calendar, X, Check, Clock, Plus } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -100,7 +100,7 @@ const CreateEvent = () => {
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-xl shadow-lg p-8">
-        <h1 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2"><Calendar className="text-blue-600"/> UnconfOS Stable</h1>
+        <h1 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2"><Calendar className="text-blue-600"/> UnconfOS v8.0</h1>
         <form onSubmit={handleCreate} className="space-y-4">
           <div><label className="block text-sm font-medium mb-1">Event Name</label><input required className="w-full p-2 border rounded" placeholder="e.g. Retreat" onChange={e => setFormData({...formData, name: e.target.value})} /></div>
           <div className="grid grid-cols-2 gap-4">
@@ -133,6 +133,7 @@ const EventGrid = () => {
   // Settings State
   const [showSettings, setShowSettings] = useState(false);
   const [newRoomName, setNewRoomName] = useState("");
+  const [newStartDate, setNewStartDate] = useState("");
   const [newEndDate, setNewEndDate] = useState("");
   
   const [myRSVPs, setMyRSVPs] = useState({});
@@ -148,16 +149,16 @@ const EventGrid = () => {
         const d = generateDateRange(data.config.startDate, data.config.endDate);
         setDates(d);
         if (!selectedDay && d.length > 0) setSelectedDay(d[0]);
+        // Init settings inputs
+        setNewStartDate(data.config.startDate || "");
         setNewEndDate(data.config.endDate || "");
       }
     });
     return () => unsubscribe();
   }, [eventId]);
 
-  // SAFE ROOMS LIST: Prevents crash if rooms is undefined or object
   const safeRooms = useMemo(() => {
     if (!eventData?.config?.rooms) return [];
-    // Convert object to array and filter out nulls/empty
     const rooms = Object.values(eventData.config.rooms);
     return rooms.filter(r => r && typeof r === 'string');
   }, [eventData]);
@@ -166,8 +167,6 @@ const EventGrid = () => {
   const endHour = eventData?.config?.endHour || 24;
   const dayStartMinutes = startHour * 60;
   const totalHeight = (endHour - startHour) * 60 * PX_PER_MIN;
-
-  // --- ACTIONS ---
 
   const handleCanvasMouseDown = (e, room) => {
     if (e.button !== 0) return;
@@ -225,24 +224,29 @@ const EventGrid = () => {
     localStorage.setItem(`rsvps_${eventId}`, JSON.stringify(newLocal));
   };
 
-  // --- SETTINGS HANDLERS (CRASH PROOF) ---
+  // --- FIXED SETTINGS HANDLERS (USING SET INSTEAD OF UPDATE) ---
   const handleAddRoom = () => {
     if (!newRoomName) return;
-    // ALWAYS work with the safe array
-    update(ref(db, `events/${eventId}/config/rooms`), [...safeRooms, safeKey(newRoomName)]);
+    const newRoomsList = [...safeRooms, safeKey(newRoomName)];
+    // "set" completely overwrites the node, guaranteeing the array structure
+    set(ref(db, `events/${eventId}/config/rooms`), newRoomsList);
     setNewRoomName("");
   };
 
   const handleDeleteRoom = (r) => {
     if(window.confirm(`Delete room "${r}"?`)) {
-      update(ref(db, `events/${eventId}/config/rooms`), safeRooms.filter(room => room !== r));
+      const newRoomsList = safeRooms.filter(room => room !== r);
+      set(ref(db, `events/${eventId}/config/rooms`), newRoomsList);
     }
   };
 
-  const handleUpdateEndDate = () => {
-    if(newEndDate) {
-      update(ref(db, `events/${eventId}/config`), { endDate: newEndDate });
-      alert("Updated!");
+  const handleUpdateDates = () => {
+    if(newStartDate && newEndDate) {
+      update(ref(db, `events/${eventId}/config`), { 
+        startDate: newStartDate,
+        endDate: newEndDate 
+      });
+      alert("Dates updated!");
     }
   };
 
@@ -272,7 +276,6 @@ const EventGrid = () => {
 
       {/* Main Grid */}
       <main className="flex-1 overflow-auto flex relative bg-white select-none">
-        {/* Sidebar */}
         <div className="sticky left-0 bg-white z-20 border-r w-14 flex-none" style={{ height: totalHeight }}>
           {hourMarkers.map(h => (
             <div key={h} className="absolute w-full text-center text-xs text-slate-400 font-bold" 
@@ -282,7 +285,6 @@ const EventGrid = () => {
           ))}
         </div>
 
-        {/* Room Columns */}
         <div className="flex flex-1 min-w-0" style={{ height: totalHeight }}>
           {safeRooms.map(room => (
             <div 
@@ -293,7 +295,6 @@ const EventGrid = () => {
             >
               <div className="sticky top-0 bg-white/95 backdrop-blur border-b z-30 p-2 text-center text-sm font-bold text-slate-700 uppercase">{room}</div>
 
-              {/* Grid Lines */}
               {hourMarkers.map(h => (
                 <div key={h} className="absolute w-full border-t border-slate-300" style={{ top: (h * 60 - dayStartMinutes) * PX_PER_MIN }}></div>
               ))}
@@ -301,7 +302,6 @@ const EventGrid = () => {
                  <div key={`${h}-${m}`} className="absolute w-full border-t border-slate-100" style={{ top: ((h * 60 + m) - dayStartMinutes) * PX_PER_MIN }}></div>
               )))}
 
-              {/* Events */}
               {Object.entries(eventData.schedule || {})
                 .filter(([key]) => key.startsWith(`${selectedDay}::`) && key.endsWith(`::${room}`))
                 .map(([key, session]) => {
@@ -339,7 +339,6 @@ const EventGrid = () => {
                 })
               }
 
-              {/* Ghost Event */}
               {isDragging && dragRoom === room && (
                 <div 
                   className="absolute left-1 right-1 bg-blue-500/90 border-l-4 border-blue-700 rounded p-2 z-50 pointer-events-none shadow-xl text-white"
@@ -354,7 +353,6 @@ const EventGrid = () => {
         </div>
       </main>
 
-      {/* Add Session Modal */}
       {modalOpen && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-6">
@@ -373,7 +371,6 @@ const EventGrid = () => {
         </div>
       )}
 
-      {/* Settings Modal - CRASH PROOF */}
       {showSettings && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -384,14 +381,19 @@ const EventGrid = () => {
 
             <div className="mb-8">
               <h4 className="text-sm font-bold text-slate-500 uppercase mb-2">Duration</h4>
-              <div className="flex gap-2 items-end">
+              <div className="flex gap-2 items-end mb-2">
+                <div className="flex-1">
+                  <label className="text-xs text-slate-400 block mb-1">Start Date</label>
+                  <input type="date" className="w-full p-2 border rounded" 
+                    value={newStartDate} onChange={e => setNewStartDate(e.target.value)} />
+                </div>
                 <div className="flex-1">
                   <label className="text-xs text-slate-400 block mb-1">End Date</label>
                   <input type="date" className="w-full p-2 border rounded" 
                     value={newEndDate} onChange={e => setNewEndDate(e.target.value)} />
                 </div>
-                <button onClick={handleUpdateEndDate} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 h-[42px]">Update</button>
               </div>
+              <button onClick={handleUpdateDates} className="w-full bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Update Dates</button>
             </div>
             
             <div>
