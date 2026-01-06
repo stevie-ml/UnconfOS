@@ -27,9 +27,7 @@ const db = getDatabase(app);
 const generateDateRange = (start, end) => {
   const dates = [];
   let current = new Date(start);
-  // fix timezone offset for accurate day calculation
   current.setMinutes(current.getMinutes() + current.getTimezoneOffset());
-  
   const endDate = new Date(end);
   endDate.setMinutes(endDate.getMinutes() + endDate.getTimezoneOffset());
 
@@ -40,16 +38,29 @@ const generateDateRange = (start, end) => {
   return dates;
 };
 
+// Generate 15-minute intervals
+const generateTimeSlots = (startHour = 9, endHour = 22) => {
+  const slots = [];
+  for (let h = startHour; h <= endHour; h++) {
+    for (let m = 0; m < 60; m += 15) {
+      const hourStr = h.toString().padStart(2, '0');
+      const minStr = m.toString().padStart(2, '0');
+      slots.push(`${hourStr}:${minStr}`);
+    }
+  }
+  return slots;
+};
+
 // --- COMPONENTS ---
 
-// 1. LANDING PAGE (Create Event)
+// 1. LANDING PAGE
 const CreateEvent = () => {
   const navigate = useNavigate();
   const [formData, setFormData] = useState({
     name: '',
     startDate: '',
     endDate: '',
-    rooms: ['Main Hall', 'Dining Room'] // defaults
+    rooms: ['Main Hall', 'Dining Room']
   });
 
   const handleCreate = async (e) => {
@@ -58,8 +69,8 @@ const CreateEvent = () => {
     const newEventRef = await push(eventsRef, {
       config: {
         ...formData,
-        // Default hours 9am to 10pm
-        hours: ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00", "22:00"]
+        startHour: 9,
+        endHour: 23
       },
       schedule: {}
     });
@@ -70,7 +81,7 @@ const CreateEvent = () => {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-xl shadow-lg p-8">
         <h1 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2">
-          <Calendar className="text-blue-600"/> UnconfOS
+          <Calendar className="text-blue-600"/> UnconfOS v2
         </h1>
         <form onSubmit={handleCreate} className="space-y-4">
           <div>
@@ -91,7 +102,7 @@ const CreateEvent = () => {
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Initial Rooms (comma separated)</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Initial Rooms</label>
             <input className="w-full p-2 border rounded" placeholder="Main Hall, Garden..." 
               value={formData.rooms.join(', ')}
               onChange={e => setFormData({...formData, rooms: e.target.value.split(',').map(s => s.trim())})} />
@@ -111,11 +122,20 @@ const EventGrid = () => {
   const [eventData, setEventData] = useState(null);
   const [dates, setDates] = useState([]);
   const [selectedDay, setSelectedDay] = useState("");
-  const [isEditing, setIsEditing] = useState(null); 
-  const [tempData, setTempData] = useState({ title: "", host: "" });
+  
+  // Drag Selection State
+  const [isDragging, setIsDragging] = useState(false);
+  const [selectionStart, setSelectionStart] = useState(null); // { timeIndex, room }
+  const [selectionEnd, setSelectionEnd] = useState(null); // { timeIndex, room }
+  
+  // Modal State
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingSession, setEditingSession] = useState(null); // If editing existing
+  const [tempData, setTempData] = useState({ title: "", host: "", description: "" });
   const [showRoomModal, setShowRoomModal] = useState(false);
   const [newRoomName, setNewRoomName] = useState("");
 
+  // Load Data
   useEffect(() => {
     const eventRef = ref(db, `events/${eventId}`);
     const unsubscribe = onValue(eventRef, (snapshot) => {
@@ -130,36 +150,96 @@ const EventGrid = () => {
     return () => unsubscribe();
   }, [eventId]);
 
-  const saveSchedule = (newSchedule) => {
-    update(ref(db, `events/${eventId}`), { schedule: newSchedule });
+  // Derived Data (Time Slots)
+  const timeSlots = useMemo(() => {
+    if (!eventData) return [];
+    return generateTimeSlots(eventData.config.startHour || 8, eventData.config.endHour || 24);
+  }, [eventData]);
+
+  // Derived Data (Processed Grid for RowSpans)
+  const gridLayout = useMemo(() => {
+    if (!eventData || !selectedDay) return {};
+    const map = {};
+    const schedule = eventData.schedule || {};
+
+    // 1. Place all sessions
+    Object.keys(schedule).forEach(key => {
+      const [day, time, room] = key.split('::');
+      if (day !== selectedDay) return;
+      
+      const session = schedule[key];
+      const timeIndex = timeSlots.indexOf(time);
+      if (timeIndex === -1) return;
+
+      // Calculate span (duration / 15 mins)
+      const duration = session.duration || 60; // default to 60 if missing
+      const span = Math.ceil(duration / 15);
+
+      if (!map[room]) map[room] = {};
+      
+      // Mark start slot
+      map[room][timeIndex] = { type: 'head', span, data: session, key };
+
+      // Mark blocked slots
+      for (let i = 1; i < span; i++) {
+        if (timeIndex + i < timeSlots.length) {
+          map[room][timeIndex + i] = { type: 'body' };
+        }
+      }
+    });
+    return map;
+  }, [eventData, selectedDay, timeSlots]);
+
+  // --- HANDLERS ---
+
+  const handleMouseDown = (timeIndex, room) => {
+    // Only allow drag on empty slots
+    if (gridLayout[room]?.[timeIndex]) return; 
+    setIsDragging(true);
+    setSelectionStart({ timeIndex, room });
+    setSelectionEnd({ timeIndex, room });
   };
 
-  const handleClaim = () => {
+  const handleMouseEnter = (timeIndex, room) => {
+    if (!isDragging || selectionStart.room !== room) return;
+    setSelectionEnd({ timeIndex, room });
+  };
+
+  const handleMouseUp = () => {
+    if (!isDragging) return;
+    setIsDragging(false);
+    setModalOpen(true);
+    setTempData({ title: "", host: "", description: "" });
+  };
+
+  const saveSession = () => {
     if (!tempData.title) return;
-    const slotId = `${selectedDay}::${isEditing.time}::${isEditing.room}`;
-    const newSession = { ...tempData, rsvps: 0 };
-    const newSchedule = { ...(eventData.schedule || {}), [slotId]: newSession };
-    saveSchedule(newSchedule);
-    setIsEditing(null);
-    setTempData({ title: "", host: "" });
-  };
+    
+    // Calculate start time and duration
+    const startIdx = Math.min(selectionStart.timeIndex, selectionEnd.timeIndex);
+    const endIdx = Math.max(selectionStart.timeIndex, selectionEnd.timeIndex);
+    const duration = (endIdx - startIdx + 1) * 15;
+    const startTime = timeSlots[startIdx];
 
-  const handleDelete = (day, time, room) => {
-    if(!window.confirm("Remove this session?")) return;
-    const slotId = `${day}::${time}::${room}`;
-    const newSchedule = { ...eventData.schedule };
-    delete newSchedule[slotId];
-    saveSchedule(newSchedule);
-  };
-
-  const handleRSVP = (day, time, room) => {
-    const slotId = `${day}::${time}::${room}`;
-    const session = eventData.schedule[slotId];
-    const newSchedule = {
-      ...eventData.schedule,
-      [slotId]: { ...session, rsvps: (session.rsvps || 0) + 1 }
+    const slotId = `${selectedDay}::${startTime}::${selectionStart.room}`;
+    
+    const newSession = { 
+      ...tempData, 
+      duration, 
+      rsvps: 0 
     };
-    saveSchedule(newSchedule);
+
+    const newSchedule = { ...(eventData.schedule || {}), [slotId]: newSession };
+    update(ref(db, `events/${eventId}`), { schedule: newSchedule });
+    setModalOpen(false);
+    setEditingSession(null);
+  };
+
+  const handleDeleteSession = (key) => {
+    if(!window.confirm("Delete this session?")) return;
+    const newSchedule = { ...eventData.schedule };
+    delete newSchedule[key];
+    update(ref(db, `events/${eventId}`), { schedule: newSchedule });
   };
 
   const handleAddRoom = () => {
@@ -167,139 +247,201 @@ const EventGrid = () => {
     const newRooms = [...(eventData.config.rooms || []), newRoomName];
     update(ref(db, `events/${eventId}/config`), { rooms: newRooms });
     setNewRoomName("");
-    setShowRoomModal(false);
   };
 
-  if (!eventData) return <div className="p-10 text-center">Loading Event...</div>;
+  const handleDeleteRoom = (roomToDelete) => {
+    if(!window.confirm(`Delete room "${roomToDelete}"? This will hide sessions in this room.`)) return;
+    const newRooms = eventData.config.rooms.filter(r => r !== roomToDelete);
+    update(ref(db, `events/${eventId}/config`), { rooms: newRooms });
+  };
+
+  const handleRSVP = (key) => {
+    const session = eventData.schedule[key];
+    update(ref(db, `events/${eventId}/schedule/${key}`), { rsvps: (session.rsvps || 0) + 1 });
+  };
+
+  if (!eventData) return <div className="p-10 text-center animate-pulse">Loading UnconfOS...</div>;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-20">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm">
+        <div className="max-w-full px-4 py-3 flex justify-between items-center">
           <div>
             <h1 className="text-xl font-bold text-slate-800">{eventData.config.name}</h1>
-            <p className="text-xs text-slate-500">Unconference Scheduler</p>
+            <div className="flex gap-2 text-xs text-slate-500 overflow-x-auto max-w-[200px] md:max-w-none no-scrollbar">
+              {dates.map(day => {
+                const isSelected = selectedDay === day;
+                return (
+                  <button 
+                    key={day} 
+                    onClick={() => setSelectedDay(day)}
+                    className={`whitespace-nowrap px-2 py-1 rounded transition-colors ${isSelected ? 'bg-slate-800 text-white font-bold' : 'hover:bg-slate-100'}`}
+                  >
+                    {day.split(' ').slice(0, 3).join(' ')}
+                  </button>
+                )
+              })}
+            </div>
           </div>
           <div className="flex gap-2">
-            <button onClick={() => setShowRoomModal(true)} className="p-2 text-slate-600 hover:bg-slate-100 rounded-md flex items-center gap-1 text-sm">
-              <Settings size={16}/> Rooms
+            <button onClick={() => setShowRoomModal(true)} className="p-2 text-slate-600 hover:bg-slate-100 rounded-md">
+              <Settings size={20}/>
             </button>
             <button onClick={() => {
               navigator.clipboard.writeText(window.location.href);
-              alert("URL copied to clipboard!");
-            }} className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700 flex items-center gap-2">
-              <Share2 size={16}/> Share
+              alert("URL copied!");
+            }} className="bg-blue-600 text-white px-3 py-1.5 rounded-md text-sm font-medium hover:bg-blue-700 flex items-center gap-1">
+              <Share2 size={14}/> <span className="hidden sm:inline">Share</span>
             </button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto p-4">
-        {/* Day Tabs */}
-        <div className="flex gap-2 overflow-x-auto pb-4 mb-2">
-          {dates.map(day => (
-            <button key={day} onClick={() => setSelectedDay(day)}
-              className={`px-4 py-2 rounded-full whitespace-nowrap text-sm font-medium transition-colors ${
-                selectedDay === day ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 border border-slate-200'
-              }`}>
-              {day.split(' ').slice(0, 3).join(' ')}
-            </button>
-          ))}
-        </div>
+      {/* Main Grid */}
+      <main className="flex-1 overflow-auto bg-white relative select-none">
+        <table className="w-full border-collapse">
+          <thead>
+            <tr>
+              <th className="sticky top-0 left-0 z-40 bg-slate-50 border-b border-r w-16 min-w-[4rem] text-center text-xs font-medium text-slate-400 py-2">
+                Time
+              </th>
+              {eventData.config.rooms.map(room => (
+                <th key={room} className="sticky top-0 z-30 bg-slate-50 border-b border-r min-w-[160px] text-xs font-bold text-slate-600 uppercase tracking-wider py-2 px-2 text-left">
+                  {room}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {timeSlots.map((time, tIndex) => {
+              const isHour = time.endsWith("00");
+              return (
+                <tr key={time}>
+                  {/* Time Column */}
+                  <td className={`sticky left-0 z-20 bg-white border-r text-[10px] text-slate-400 text-center align-top pt-1 ${isHour ? 'border-t border-slate-200 font-bold text-slate-600' : 'border-t-0'}`}>
+                    {isHour ? time : <span className="opacity-0 group-hover:opacity-100">{time}</span>}
+                  </td>
 
-        {/* Grid */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[800px]">
-              <thead>
-                <tr>
-                  <th className="p-3 text-left bg-slate-50 border-b border-r w-24 sticky left-0 z-10 text-xs font-bold text-slate-400 uppercase tracking-wider">Time</th>
-                  {eventData.config.rooms.map(room => (
-                    <th key={room} className="p-3 text-left bg-slate-50 border-b min-w-[200px] text-xs font-bold text-slate-400 uppercase tracking-wider">
-                      {room}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {eventData.config.hours.map((time) => (
-                  <tr key={time}>
-                    <td className="p-3 border-b border-r bg-slate-50 text-xs font-mono text-slate-500 sticky left-0 z-10">{time}</td>
-                    {eventData.config.rooms.map((room) => {
-                      const slotId = `${selectedDay}::${time}::${room}`;
-                      const session = eventData.schedule ? eventData.schedule[slotId] : null;
+                  {/* Room Columns */}
+                  {eventData.config.rooms.map(room => {
+                    const cellData = gridLayout[room]?.[tIndex];
+                    
+                    // If this slot is blocked by a session above, render nothing
+                    if (cellData?.type === 'body') return null;
 
+                    // If this is the start of a session
+                    if (cellData?.type === 'head') {
+                      const { data, span, key } = cellData;
                       return (
-                        <td key={room} className="p-1 border-b border-r border-slate-100 h-28 align-top w-64">
-                          {session ? (
-                            <div className="h-full bg-blue-50/50 hover:bg-blue-50 border border-blue-100 rounded p-2 flex flex-col justify-between group relative">
-                              <button onClick={() => handleDelete(selectedDay, time, room)} 
-                                className="absolute top-1 right-1 text-blue-300 hover:text-red-500 opacity-0 group-hover:opacity-100">
-                                <Trash2 size={12}/>
-                              </button>
-                              <div>
-                                <div className="font-bold text-sm text-slate-800 leading-tight mb-1">{session.title}</div>
-                                <div className="text-xs text-slate-500">{session.host}</div>
-                              </div>
-                              <button onClick={() => handleRSVP(selectedDay, time, room)} 
-                                className="self-start text-xs flex items-center gap-1 text-blue-600 hover:bg-blue-100 px-1.5 py-0.5 rounded transition">
-                                <Users size={10} /> {session.rsvps}
-                              </button>
-                            </div>
-                          ) : (
-                            <button onClick={() => setIsEditing({ time, room })}
-                              className="w-full h-full flex items-center justify-center text-slate-200 hover:text-blue-400 hover:bg-slate-50 rounded transition-all">
-                              <Plus size={16} />
-                            </button>
-                          )}
+                        <td 
+                          key={room} 
+                          rowSpan={span}
+                          className="p-1 border-r border-b border-slate-100 relative group align-top"
+                        >
+                          <div className="h-full w-full bg-blue-100/50 hover:bg-blue-100 border-l-4 border-blue-500 rounded-r shadow-sm p-2 flex flex-col justify-between overflow-hidden relative">
+                             <div className="absolute right-1 top-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-white/50 rounded">
+                               <button onClick={() => handleDeleteSession(key)} className="p-1 hover:text-red-600"><Trash2 size={12}/></button>
+                             </div>
+                             <div>
+                               <div className="font-bold text-sm text-blue-900 leading-tight mb-0.5">{data.title}</div>
+                               <div className="text-xs text-blue-700">{data.host} • {data.duration}m</div>
+                             </div>
+                             <div className="mt-1 pt-1 border-t border-blue-200/50 flex justify-between items-center">
+                               <button onClick={() => handleRSVP(key)} className="text-[10px] flex items-center gap-1 bg-white/50 px-1.5 rounded hover:bg-white text-blue-800">
+                                 <Users size={10}/> {data.rsvps}
+                               </button>
+                             </div>
+                          </div>
                         </td>
                       );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+                    }
+
+                    // Empty Slot
+                    const isSelected = isDragging && 
+                      selectionStart.room === room && 
+                      tIndex >= Math.min(selectionStart.timeIndex, selectionEnd?.timeIndex) &&
+                      tIndex <= Math.max(selectionStart.timeIndex, selectionEnd?.timeIndex);
+
+                    return (
+                      <td 
+                        key={room}
+                        onMouseDown={() => handleMouseDown(tIndex, room)}
+                        onMouseEnter={() => handleMouseEnter(tIndex, room)}
+                        onMouseUp={handleMouseUp}
+                        className={`border-r border-slate-100 transition-colors relative h-8
+                          ${isHour ? 'border-t border-slate-200' : 'border-t border-slate-50'}
+                          ${isSelected ? 'bg-blue-200' : 'hover:bg-slate-50'}
+                        `}
+                      >
+                         {/* Visual helper for "Add" on hover */}
+                         {!isDragging && (
+                           <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 pointer-events-none">
+                             <Plus size={14} className="text-slate-300"/>
+                           </div>
+                         )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </main>
 
-      {/* Claim Slot Modal */}
-      {isEditing && (
+      {/* New Session Modal */}
+      {modalOpen && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-6">
-            <h3 className="font-bold text-lg mb-4">Add Session</h3>
-            <div className="text-sm text-slate-500 mb-4">{selectedDay} @ {isEditing.time} in {isEditing.room}</div>
-            <input autoFocus className="w-full mb-3 p-2 border rounded" placeholder="Session Title" 
+            <h3 className="font-bold text-lg mb-1">Create Session</h3>
+            <div className="text-xs text-slate-500 mb-4 uppercase font-bold tracking-wide">
+              {timeSlots[Math.min(selectionStart.timeIndex, selectionEnd.timeIndex)]} - {timeSlots[Math.max(selectionStart.timeIndex, selectionEnd.timeIndex) + 1] || 'End'} 
+              {' '}({(Math.abs(selectionEnd.timeIndex - selectionStart.timeIndex) + 1) * 15} min)
+            </div>
+            
+            <input autoFocus className="w-full mb-3 p-2 border rounded focus:ring-2 ring-blue-500 outline-none" 
+              placeholder="Session Title" 
               value={tempData.title} onChange={e => setTempData({...tempData, title: e.target.value})} />
-            <input className="w-full mb-4 p-2 border rounded" placeholder="Your Name" 
+            
+            <input className="w-full mb-4 p-2 border rounded focus:ring-2 ring-blue-500 outline-none" 
+              placeholder="Host Name" 
               value={tempData.host} onChange={e => setTempData({...tempData, host: e.target.value})} />
+
             <div className="flex gap-2">
-              <button onClick={handleClaim} className="flex-1 bg-blue-600 text-white py-2 rounded">Save</button>
-              <button onClick={() => setIsEditing(null)} className="flex-1 bg-slate-100 text-slate-700 py-2 rounded">Cancel</button>
+              <button onClick={saveSession} className="flex-1 bg-blue-600 text-white py-2 rounded font-medium">Save</button>
+              <button onClick={() => setModalOpen(false)} className="flex-1 bg-slate-100 text-slate-700 py-2 rounded font-medium">Cancel</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Add Room Modal */}
+      {/* Room Management Modal */}
       {showRoomModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-6">
-            <h3 className="font-bold text-lg mb-4">Manage Rooms</h3>
-            <div className="mb-4">
-               <div className="flex flex-wrap gap-2 mb-4">
-                 {eventData.config.rooms.map(r => (
-                   <span key={r} className="bg-slate-100 px-2 py-1 rounded text-sm border">{r}</span>
-                 ))}
-               </div>
-               <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Add New Room</label>
-               <input className="w-full p-2 border rounded" placeholder="e.g. The Library" 
-                 value={newRoomName} onChange={e => setNewRoomName(e.target.value)} />
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-lg">Manage Rooms</h3>
+              <button onClick={() => setShowRoomModal(false)}><X size={20}/></button>
             </div>
-            <div className="flex gap-2">
-              <button onClick={handleAddRoom} className="flex-1 bg-green-600 text-white py-2 rounded">Add Room</button>
-              <button onClick={() => setShowRoomModal(false)} className="flex-1 bg-slate-100 text-slate-700 py-2 rounded">Done</button>
+            
+            <div className="space-y-2 mb-6 max-h-[50vh] overflow-y-auto">
+              {eventData.config.rooms.map(r => (
+                <div key={r} className="flex justify-between items-center bg-slate-50 p-2 rounded border">
+                  <span className="font-medium text-sm">{r}</span>
+                  <button onClick={() => handleDeleteRoom(r)} className="text-slate-400 hover:text-red-500 p-1">
+                    <Trash2 size={16}/>
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex gap-2 border-t pt-4">
+               <input className="flex-1 p-2 border rounded text-sm" placeholder="New Room Name" 
+                 value={newRoomName} onChange={e => setNewRoomName(e.target.value)} />
+               <button onClick={handleAddRoom} className="bg-green-600 text-white px-4 rounded hover:bg-green-700">
+                 <Plus size={20}/>
+               </button>
             </div>
           </div>
         </div>
@@ -308,7 +450,6 @@ const EventGrid = () => {
   );
 };
 
-// --- APP ROOT ---
 export default function App() {
   return (
     <BrowserRouter>
