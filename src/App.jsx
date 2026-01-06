@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom';
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, push, onValue, update } from "firebase/database";
-import { Plus, Users, Settings, Trash2, Share2, Calendar, X, Check } from 'lucide-react';
+import { Users, Settings, Trash2, Share2, Calendar, X, Check, Clock } from 'lucide-react';
 
 // --- CONFIGURATION ---
 const firebaseConfig = {
@@ -19,29 +19,40 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-// --- HELPERS ---
+// --- CONSTANTS ---
+const PX_PER_MIN = 2; 
+const SLOT_MINUTES = 15;
 
-// Hardcoded distinct colors to ensure visibility
-const HOST_COLORS = [
-  { bg: '#fee2e2', border: '#b91c1c', text: '#7f1d1d' }, // Red
-  { bg: '#ffedd5', border: '#c2410c', text: '#7c2d12' }, // Orange
-  { bg: '#fef3c7', border: '#b45309', text: '#78350f' }, // Amber
-  { bg: '#dcfce7', border: '#15803d', text: '#14532d' }, // Green
-  { bg: '#ccfbf1', border: '#0f766e', text: '#134e4a' }, // Teal
-  { bg: '#dbeafe', border: '#1d4ed8', text: '#1e3a8a' }, // Blue
-  { bg: '#e0e7ff', border: '#4338ca', text: '#312e81' }, // Indigo
-  { bg: '#f3e8ff', border: '#7e22ce', text: '#581c87' }, // Purple
-  { bg: '#fae8ff', border: '#a21caf', text: '#701a75' }, // Fuchsia
-  { bg: '#fce7f3', border: '#be185d', text: '#831843' }, // Pink
+// --- HELPERS ---
+const getMinutes = (timeStr) => {
+  const [h, m] = timeStr.split(':').map(Number);
+  return h * 60 + m;
+};
+
+const formatTime = (minutes) => {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+};
+
+const COLORS = [
+  { bg: '#fee2e2', border: '#ef4444', text: '#7f1d1d' }, // Red
+  { bg: '#ffedd5', border: '#f97316', text: '#7c2d12' }, // Orange
+  { bg: '#fef9c3', border: '#eab308', text: '#713f12' }, // Yellow
+  { bg: '#dcfce7', border: '#22c55e', text: '#14532d' }, // Green
+  { bg: '#dbeafe', border: '#3b82f6', text: '#1e3a8a' }, // Blue
+  { bg: '#ede9fe', border: '#8b5cf6', text: '#5b21b6' }, // Violet
+  { bg: '#fae8ff', border: '#d946ef', text: '#701a75' }, // Fuchsia
+  { bg: '#fce7f3', border: '#db2777', text: '#831843' }, // Pink
+  { bg: '#f1f5f9', border: '#64748b', text: '#0f172a' }, // Slate
+  { bg: '#ccfbf1', border: '#14b8a6', text: '#134e4a' }, // Teal
 ];
 
-const getHostStyle = (name) => {
-  if (!name) return { backgroundColor: '#f1f5f9', borderColor: '#94a3b8', color: '#334155' };
+const getHostColor = (name) => {
+  if (!name) return COLORS[8]; // Default Slate
   let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return HOST_COLORS[Math.abs(hash) % HOST_COLORS.length];
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  return COLORS[Math.abs(hash) % COLORS.length];
 };
 
 const generateDateRange = (startStr, endStr) => {
@@ -54,16 +65,6 @@ const generateDateRange = (startStr, endStr) => {
     current.setDate(current.getDate() + 1);
   }
   return dates;
-};
-
-const generateTimeSlots = (startHour = 9, endHour = 22) => {
-  const slots = [];
-  for (let h = startHour; h <= endHour; h++) {
-    for (let m = 0; m < 60; m += 15) {
-      slots.push(`${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`);
-    }
-  }
-  return slots;
 };
 
 const safeKey = (str) => str.replace(/[.#$[\]]/g, "");
@@ -79,7 +80,7 @@ const CreateEvent = () => {
     if (!formData.startDate || !formData.endDate) { alert("Please select dates"); return; }
     const eventsRef = ref(db, 'events');
     const newEventRef = await push(eventsRef, {
-      config: { ...formData, startHour: 9, endHour: 23 },
+      config: { ...formData, startHour: 8, endHour: 24 }, // Default config
       schedule: {}
     });
     navigate(`/event/${newEventRef.key}`);
@@ -88,7 +89,7 @@ const CreateEvent = () => {
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-xl shadow-lg p-8">
-        <h1 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2"><Calendar className="text-blue-600"/> UnconfOS v2.2</h1>
+        <h1 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2"><Calendar className="text-blue-600"/> UnconfOS v4.0</h1>
         <form onSubmit={handleCreate} className="space-y-4">
           <div><label className="block text-sm font-medium mb-1">Event Name</label><input required className="w-full p-2 border rounded" placeholder="e.g. Retreat" onChange={e => setFormData({...formData, name: e.target.value})} /></div>
           <div className="grid grid-cols-2 gap-4">
@@ -108,9 +109,13 @@ const EventGrid = () => {
   const [eventData, setEventData] = useState(null);
   const [dates, setDates] = useState([]);
   const [selectedDay, setSelectedDay] = useState("");
+  
+  // Drag State
   const [isDragging, setIsDragging] = useState(false);
-  const [selectionStart, setSelectionStart] = useState(null); 
-  const [selectionEnd, setSelectionEnd] = useState(null); 
+  const [dragRoom, setDragRoom] = useState(null);
+  const [dragStartMin, setDragStartMin] = useState(null);
+  const [dragCurrentMin, setDragCurrentMin] = useState(null);
+
   const [modalOpen, setModalOpen] = useState(false);
   const [tempData, setTempData] = useState({ title: "", host: "" });
   const [showRoomModal, setShowRoomModal] = useState(false);
@@ -120,7 +125,6 @@ const EventGrid = () => {
   useEffect(() => {
     const saved = localStorage.getItem(`rsvps_${eventId}`);
     if (saved) setMyRSVPs(JSON.parse(saved));
-
     const unsubscribe = onValue(ref(db, `events/${eventId}`), (snapshot) => {
       const data = snapshot.val();
       if (data && data.config) {
@@ -133,40 +137,40 @@ const EventGrid = () => {
     return () => unsubscribe();
   }, [eventId]);
 
-  const timeSlots = useMemo(() => {
-    if (!eventData?.config) return [];
-    return generateTimeSlots(eventData.config.startHour || 8, eventData.config.endHour || 24);
-  }, [eventData]);
+  const startHour = eventData?.config?.startHour || 8;
+  const endHour = eventData?.config?.endHour || 24;
+  const dayStartMinutes = startHour * 60;
+  const totalHeight = (endHour - startHour) * 60 * PX_PER_MIN;
 
-  const gridLayout = useMemo(() => {
-    if (!eventData?.schedule || !selectedDay) return {};
-    const map = {};
-    Object.keys(eventData.schedule).forEach(key => {
-      const [day, time, room] = key.split('::');
-      if (day !== selectedDay) return;
-      const session = eventData.schedule[key];
-      const timeIndex = timeSlots.indexOf(time);
-      if (timeIndex === -1) return;
-
-      const span = Math.ceil((session.duration || 60) / 15);
-      if (!map[room]) map[room] = {};
-      map[room][timeIndex] = { type: 'head', span, data: session, key };
-      for (let i = 1; i < span; i++) {
-        if (timeIndex + i < timeSlots.length) map[room][timeIndex + i] = { type: 'body' };
-      }
-    });
-    return map;
-  }, [eventData, selectedDay, timeSlots]);
-
-  const handleMouseDown = (timeIndex, room) => {
-    if (gridLayout[room]?.[timeIndex]) return; 
+  const handleCanvasMouseDown = (e, room) => {
+    // Only left click
+    if (e.button !== 0) return;
+    
+    // Calculate minutes from top of room column
+    const rect = e.currentTarget.getBoundingClientRect();
+    const y = e.clientY - rect.top + e.currentTarget.scrollTop;
+    const minutes = Math.floor(y / PX_PER_MIN) + dayStartMinutes;
+    
+    // Snap to 15m
+    const snapped = Math.floor(minutes / 15) * 15;
+    
     setIsDragging(true);
-    setSelectionStart({ timeIndex, room });
-    setSelectionEnd({ timeIndex, room });
+    setDragRoom(room);
+    setDragStartMin(snapped);
+    setDragCurrentMin(snapped + 15); // Default 15m duration
   };
 
-  const handleMouseEnter = (timeIndex, room) => {
-    if (isDragging && selectionStart.room === room) setSelectionEnd({ timeIndex, room });
+  const handleCanvasMouseMove = (e) => {
+    if (!isDragging) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const y = e.clientY - rect.top; // Relative to viewport/container
+    const minutes = Math.floor(y / PX_PER_MIN) + dayStartMinutes;
+    const snapped = Math.ceil(minutes / 15) * 15;
+    
+    // Ensure we don't drag backwards past start
+    if (snapped > dragStartMin) {
+      setDragCurrentMin(snapped);
+    }
   };
 
   const handleMouseUp = () => {
@@ -179,10 +183,9 @@ const EventGrid = () => {
 
   const saveSession = () => {
     if (!tempData.title) return;
-    const startIdx = Math.min(selectionStart.timeIndex, selectionEnd.timeIndex);
-    const endIdx = Math.max(selectionStart.timeIndex, selectionEnd.timeIndex);
-    const duration = (endIdx - startIdx + 1) * 15;
-    const slotId = `${selectedDay}::${timeSlots[startIdx]}::${safeKey(selectionStart.room)}`;
+    const duration = dragCurrentMin - dragStartMin;
+    const timeStr = formatTime(dragStartMin);
+    const slotId = `${selectedDay}::${timeStr}::${safeKey(dragRoom)}`;
     
     update(ref(db, `events/${eventId}/schedule/${slotId}`), { 
       ...tempData, duration, rsvps: 0 
@@ -199,12 +202,11 @@ const EventGrid = () => {
   const handleRSVP = (key) => {
     const isRSVPd = myRSVPs[key];
     const session = eventData.schedule[key];
-    const currentCount = session.rsvps || 0;
-    const newCount = isRSVPd ? Math.max(0, currentCount - 1) : currentCount + 1;
+    const newCount = isRSVPd ? Math.max(0, (session.rsvps || 0) - 1) : (session.rsvps || 0) + 1;
     update(ref(db, `events/${eventId}/schedule/${key}`), { rsvps: newCount });
-    const newLocalState = { ...myRSVPs, [key]: !isRSVPd };
-    setMyRSVPs(newLocalState);
-    localStorage.setItem(`rsvps_${eventId}`, JSON.stringify(newLocalState));
+    const newLocal = { ...myRSVPs, [key]: !isRSVPd };
+    setMyRSVPs(newLocal);
+    localStorage.setItem(`rsvps_${eventId}`, JSON.stringify(newLocal));
   };
 
   const handleAddRoom = () => {
@@ -222,9 +224,15 @@ const EventGrid = () => {
   if (!eventData) return <div className="p-10 text-center">Loading...</div>;
   const rooms = eventData.config.rooms || [];
 
+  // Generate Hour Markers
+  const hourMarkers = [];
+  for (let h = startHour; h < endHour; h++) {
+    hourMarkers.push(h);
+  }
+
   return (
-    <div className="min-h-screen bg-white text-slate-900 font-sans flex flex-col">
-      <header className="bg-white border-b sticky top-0 z-50 px-4 py-3 shadow-sm flex justify-between items-center">
+    <div className="min-h-screen bg-white text-slate-900 font-sans flex flex-col h-screen overflow-hidden" onMouseUp={handleMouseUp}>
+      <header className="bg-white border-b z-50 px-4 py-3 shadow-sm flex-none flex justify-between items-center">
         <div>
           <h1 className="text-xl font-bold">{eventData.config.name}</h1>
           <div className="flex gap-2 mt-1 overflow-x-auto no-scrollbar">
@@ -241,72 +249,110 @@ const EventGrid = () => {
         </div>
       </header>
 
-      <main className="flex-1 overflow-auto relative select-none pb-20">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr>
-              <th className="sticky top-0 left-0 z-40 bg-white border-b border-r w-14 text-center text-[10px] text-slate-400 font-medium py-2">Time</th>
-              {rooms.map(r => <th key={r} className="sticky top-0 z-30 bg-white border-b border-r min-w-[150px] text-xs font-bold text-slate-700 py-2 px-2 text-left">{r}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {timeSlots.map((time, tIndex) => {
-              const isHour = time.endsWith("00");
-              return (
-                <tr key={time} style={{ height: '40px' }}> {/* Forced Height */}
-                  <td className={`sticky left-0 z-20 bg-white border-r text-[10px] text-slate-400 text-center pt-1 align-top ${isHour ? 'border-t border-slate-200 font-bold' : 'border-t-0'}`}>{isHour ? time : ''}</td>
-                  {rooms.map(room => {
-                    const cell = gridLayout[room]?.[tIndex];
-                    if (cell?.type === 'body') return null;
-                    if (cell?.type === 'head') {
-                      const { data, span, key } = cell;
-                      const styles = getHostStyle(data.host);
-                      return (
-                        <td key={room} rowSpan={span} className="p-0 border-r border-b border-slate-100 relative group align-top"> {/* P-0 removes padding */}
-                          <div 
-                            style={{ backgroundColor: styles.bg, color: styles.text, borderLeftColor: styles.border }}
-                            className="h-full w-full border-l-4 p-2 flex flex-col justify-between overflow-hidden shadow-sm"
-                          >
-                            <div className="flex justify-between items-start">
-                              <span className="font-bold text-xs leading-tight line-clamp-2">{data.title}</span>
-                              <button onClick={() => handleDeleteSession(key)} className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-red-600"><Trash2 size={12}/></button>
-                            </div>
-                            <div className="mt-1 flex justify-between items-end">
-                               <span className="text-[10px] opacity-90 font-medium truncate max-w-[70%]">{data.host}</span>
-                               <button onClick={() => handleRSVP(key)} className={`text-[10px] flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors ${myRSVPs[key] ? 'bg-slate-900 text-white' : 'bg-white/50 hover:bg-white'}`}>
-                                 {myRSVPs[key] ? <Check size={10}/> : <Users size={10}/>} {data.rsvps || 0}
-                               </button>
-                            </div>
-                          </div>
-                        </td>
-                      );
-                    }
-                    const isSelected = isDragging && selectionStart.room === room && tIndex >= Math.min(selectionStart.timeIndex, selectionEnd?.timeIndex) && tIndex <= Math.max(selectionStart.timeIndex, selectionEnd?.timeIndex);
-                    return (
-                      <td key={room} 
-                        onMouseDown={() => handleMouseDown(tIndex, room)} 
-                        onMouseEnter={() => handleMouseEnter(tIndex, room)} 
-                        onMouseUp={handleMouseUp} 
-                        className={`border-r relative transition-colors ${isHour ? 'border-t border-slate-200' : 'border-t border-slate-50'} ${isSelected ? 'bg-blue-100' : 'hover:bg-slate-50'}`}
-                      >
-                         {!isDragging && <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 pointer-events-none"><Plus size={14} className="text-slate-300"/></div>}
-                      </td>
-                    );
-                  })}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      {/* Main Grid Canvas */}
+      <main className="flex-1 overflow-auto flex relative bg-white select-none">
+        
+        {/* Time Gutter */}
+        <div className="sticky left-0 bg-white z-20 border-r w-14 flex-none" style={{ height: totalHeight }}>
+          {hourMarkers.map(h => (
+            <div key={h} className="absolute w-full text-center text-xs text-slate-400 font-bold border-t border-transparent" 
+                 style={{ top: (h * 60 - dayStartMinutes) * PX_PER_MIN, transform: 'translateY(-50%)' }}>
+              {h}:00
+            </div>
+          ))}
+        </div>
+
+        {/* Rooms Canvas */}
+        <div className="flex flex-1 min-w-0" style={{ height: totalHeight }}>
+          {rooms.map(room => (
+            <div 
+              key={room} 
+              className="flex-1 min-w-[150px] border-r relative bg-slate-50/30 group"
+              onMouseDown={(e) => handleCanvasMouseDown(e, room)}
+              onMouseMove={handleCanvasMouseMove}
+            >
+              {/* Header */}
+              <div className="sticky top-0 bg-white/95 backdrop-blur border-b z-30 p-2 text-center text-sm font-bold text-slate-700 uppercase tracking-wide">
+                {room}
+              </div>
+
+              {/* Background Lines */}
+              {hourMarkers.map(h => (
+                <div key={h} className="absolute w-full border-t border-slate-200" style={{ top: (h * 60 - dayStartMinutes) * PX_PER_MIN }}></div>
+              ))}
+              {/* 15m lines (faint) */}
+              {hourMarkers.map(h => [15,30,45].map(m => (
+                 <div key={`${h}-${m}`} className="absolute w-full border-t border-slate-100" style={{ top: ((h * 60 + m) - dayStartMinutes) * PX_PER_MIN }}></div>
+              )))}
+
+              {/* Existing Events */}
+              {Object.entries(eventData.schedule || {})
+                .filter(([key]) => key.startsWith(`${selectedDay}::`) && key.endsWith(`::${room}`))
+                .map(([key, session]) => {
+                  const [_, timeStr] = key.split('::');
+                  const startMin = getMinutes(timeStr);
+                  const top = (startMin - dayStartMinutes) * PX_PER_MIN;
+                  const height = (session.duration || 60) * PX_PER_MIN;
+                  const styles = getHostColor(session.host);
+                  
+                  return (
+                    <div 
+                      key={key}
+                      onMouseDown={(e) => e.stopPropagation()} // Prevent dragging existing events
+                      style={{ 
+                        top: `${top}px`, 
+                        height: `${Math.max(height, 20)}px`, // Min height safety
+                        backgroundColor: styles.bg,
+                        borderColor: styles.border,
+                        color: styles.text,
+                      }}
+                      className="absolute left-1 right-1 border-l-4 rounded p-2 text-xs flex flex-col justify-between shadow-sm z-10 overflow-hidden hover:z-20 hover:shadow-md transition-shadow cursor-default"
+                    >
+                      <div className="flex justify-between items-start">
+                        <span className="font-bold leading-tight">{session.title}</span>
+                        <button onClick={() => handleDeleteSession(key)} className="hover:text-red-600 p-0.5"><Trash2 size={12}/></button>
+                      </div>
+                      <div className="flex justify-between items-end mt-1">
+                        <div className="flex flex-col">
+                           <span className="opacity-90 font-medium">{session.host}</span>
+                           <span className="opacity-75 text-[10px]">{formatTime(startMin)} - {formatTime(startMin + (session.duration || 60))}</span>
+                        </div>
+                        <button onClick={() => handleRSVP(key)} className={`flex items-center gap-1 px-1.5 py-0.5 rounded ${myRSVPs[key] ? 'bg-slate-900 text-white' : 'bg-white/60 hover:bg-white'}`}>
+                          {myRSVPs[key] ? <Check size={10}/> : <Users size={10}/>} {session.rsvps || 0}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              }
+
+              {/* Ghost Event (During Drag) */}
+              {isDragging && dragRoom === room && (
+                <div 
+                  className="absolute left-1 right-1 bg-blue-500/20 border-l-4 border-blue-500 rounded p-2 z-20 pointer-events-none"
+                  style={{
+                    top: `${(dragStartMin - dayStartMinutes) * PX_PER_MIN}px`,
+                    height: `${(dragCurrentMin - dragStartMin) * PX_PER_MIN}px`
+                  }}
+                >
+                   <div className="text-blue-900 font-bold text-xs">New Session</div>
+                   <div className="text-blue-800 text-xs">{formatTime(dragStartMin)} - {formatTime(dragCurrentMin)}</div>
+                </div>
+              )}
+
+            </div>
+          ))}
+        </div>
       </main>
 
-      {/* Modal for Creating Session */}
+      {/* Creation Modal */}
       {modalOpen && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-6">
             <h3 className="font-bold text-lg mb-4">Add Session</h3>
-            <div className="mb-4 text-xs font-mono bg-slate-100 p-2 rounded">
-              {timeSlots[Math.min(selectionStart.timeIndex, selectionEnd.timeIndex)]} - {timeSlots[Math.max(selectionStart.timeIndex, selectionEnd.timeIndex) + 1] || 'End'}
+            <div className="mb-4 text-xs font-mono bg-slate-100 p-2 rounded text-center">
+              {formatTime(dragStartMin)} - {formatTime(dragCurrentMin)} 
+              <span className="text-slate-500 ml-2">({dragCurrentMin - dragStartMin} min)</span>
             </div>
             <input autoFocus className="w-full mb-3 p-2 border rounded" placeholder="Title" value={tempData.title} onChange={e => setTempData({...tempData, title: e.target.value})} />
             <input className="w-full mb-4 p-2 border rounded" placeholder="Host Name (Sets Color)" value={tempData.host} onChange={e => setTempData({...tempData, host: e.target.value})} />
@@ -318,7 +364,7 @@ const EventGrid = () => {
         </div>
       )}
 
-      {/* Modal for Rooms */}
+      {/* Room Modal */}
       {showRoomModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-6">
