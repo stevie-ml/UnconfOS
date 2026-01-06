@@ -69,7 +69,6 @@ const generateDateRange = (startStr, endStr) => {
   let current = new Date(startStr + "T12:00:00");
   const end = new Date(endStr + "T12:00:00");
   
-  // Safety break to prevent infinite loops if dates are crazy
   let safety = 0;
   while (current <= end && safety < 30) {
     dates.push(current.toDateString());
@@ -101,7 +100,7 @@ const CreateEvent = () => {
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-xl shadow-lg p-8">
-        <h1 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2"><Calendar className="text-blue-600"/> UnconfOS v7.0</h1>
+        <h1 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2"><Calendar className="text-blue-600"/> UnconfOS Stable</h1>
         <form onSubmit={handleCreate} className="space-y-4">
           <div><label className="block text-sm font-medium mb-1">Event Name</label><input required className="w-full p-2 border rounded" placeholder="e.g. Retreat" onChange={e => setFormData({...formData, name: e.target.value})} /></div>
           <div className="grid grid-cols-2 gap-4">
@@ -141,6 +140,7 @@ const EventGrid = () => {
   useEffect(() => {
     const saved = localStorage.getItem(`rsvps_${eventId}`);
     if (saved) setMyRSVPs(JSON.parse(saved));
+    
     const unsubscribe = onValue(ref(db, `events/${eventId}`), (snapshot) => {
       const data = snapshot.val();
       if (data && data.config) {
@@ -148,23 +148,26 @@ const EventGrid = () => {
         const d = generateDateRange(data.config.startDate, data.config.endDate);
         setDates(d);
         if (!selectedDay && d.length > 0) setSelectedDay(d[0]);
-        // Update local state for settings, defaulting to empty string if missing
         setNewEndDate(data.config.endDate || "");
       }
     });
     return () => unsubscribe();
   }, [eventId]);
 
-  // Derived Safe Rooms List (Removes nulls to prevent crashes)
+  // SAFE ROOMS LIST: Prevents crash if rooms is undefined or object
   const safeRooms = useMemo(() => {
     if (!eventData?.config?.rooms) return [];
-    return Object.values(eventData.config.rooms).filter(r => r && typeof r === 'string');
+    // Convert object to array and filter out nulls/empty
+    const rooms = Object.values(eventData.config.rooms);
+    return rooms.filter(r => r && typeof r === 'string');
   }, [eventData]);
 
   const startHour = eventData?.config?.startHour || 8;
   const endHour = eventData?.config?.endHour || 24;
   const dayStartMinutes = startHour * 60;
   const totalHeight = (endHour - startHour) * 60 * PX_PER_MIN;
+
+  // --- ACTIONS ---
 
   const handleCanvasMouseDown = (e, room) => {
     if (e.button !== 0) return;
@@ -222,31 +225,29 @@ const EventGrid = () => {
     localStorage.setItem(`rsvps_${eventId}`, JSON.stringify(newLocal));
   };
 
-  // --- SETTINGS HANDLERS ---
+  // --- SETTINGS HANDLERS (CRASH PROOF) ---
   const handleAddRoom = () => {
     if (!newRoomName) return;
-    // CRASH FIX: Use safeRooms to ensure array structure
-    const currentRooms = safeRooms;
-    update(ref(db, `events/${eventId}/config/rooms`), [...currentRooms, safeKey(newRoomName)]);
+    // ALWAYS work with the safe array
+    update(ref(db, `events/${eventId}/config/rooms`), [...safeRooms, safeKey(newRoomName)]);
     setNewRoomName("");
   };
 
   const handleDeleteRoom = (r) => {
     if(window.confirm(`Delete room "${r}"?`)) {
-      const currentRooms = safeRooms;
-      update(ref(db, `events/${eventId}/config/rooms`), currentRooms.filter(room => room !== r));
+      update(ref(db, `events/${eventId}/config/rooms`), safeRooms.filter(room => room !== r));
     }
   };
 
   const handleUpdateEndDate = () => {
     if(newEndDate) {
       update(ref(db, `events/${eventId}/config`), { endDate: newEndDate });
-      alert("Event duration updated!");
+      alert("Updated!");
     }
   };
 
   if (!eventData) return <div className="p-10 text-center">Loading...</div>;
-  
+
   const hourMarkers = [];
   for (let h = startHour; h < endHour; h++) hourMarkers.push(h);
 
@@ -269,20 +270,19 @@ const EventGrid = () => {
         </div>
       </header>
 
-      {/* Main Grid Canvas */}
+      {/* Main Grid */}
       <main className="flex-1 overflow-auto flex relative bg-white select-none">
-        
-        {/* Time Gutter */}
+        {/* Sidebar */}
         <div className="sticky left-0 bg-white z-20 border-r w-14 flex-none" style={{ height: totalHeight }}>
           {hourMarkers.map(h => (
-            <div key={h} className="absolute w-full text-center text-xs text-slate-400 font-bold border-t border-transparent" 
+            <div key={h} className="absolute w-full text-center text-xs text-slate-400 font-bold" 
                  style={{ top: (h * 60 - dayStartMinutes) * PX_PER_MIN, transform: 'translateY(-50%)' }}>
               {h}:00
             </div>
           ))}
         </div>
 
-        {/* Rooms Canvas */}
+        {/* Room Columns */}
         <div className="flex flex-1 min-w-0" style={{ height: totalHeight }}>
           {safeRooms.map(room => (
             <div 
@@ -291,10 +291,7 @@ const EventGrid = () => {
               onMouseDown={(e) => handleCanvasMouseDown(e, room)}
               onMouseMove={handleCanvasMouseMove}
             >
-              {/* Room Header */}
-              <div className="sticky top-0 bg-white/95 backdrop-blur border-b z-30 p-2 text-center text-sm font-bold text-slate-700 uppercase tracking-wide">
-                {room}
-              </div>
+              <div className="sticky top-0 bg-white/95 backdrop-blur border-b z-30 p-2 text-center text-sm font-bold text-slate-700 uppercase">{room}</div>
 
               {/* Grid Lines */}
               {hourMarkers.map(h => (
@@ -304,7 +301,7 @@ const EventGrid = () => {
                  <div key={`${h}-${m}`} className="absolute w-full border-t border-slate-100" style={{ top: ((h * 60 + m) - dayStartMinutes) * PX_PER_MIN }}></div>
               )))}
 
-              {/* Existing Events */}
+              {/* Events */}
               {Object.entries(eventData.schedule || {})
                 .filter(([key]) => key.startsWith(`${selectedDay}::`) && key.endsWith(`::${room}`))
                 .map(([key, session]) => {
@@ -318,14 +315,7 @@ const EventGrid = () => {
                     <div 
                       key={key}
                       onMouseDown={(e) => e.stopPropagation()} 
-                      style={{ 
-                        top: `${top}px`, 
-                        height: `${Math.max(height, 30)}px`,
-                        backgroundColor: styles.bg,
-                        borderColor: styles.border,
-                        color: styles.text,
-                        zIndex: 10
-                      }}
+                      style={{ top: `${top}px`, height: `${Math.max(height, 30)}px`, backgroundColor: styles.bg, borderColor: styles.border, color: styles.text, zIndex: 10 }}
                       className="absolute left-1 right-1 border-l-4 rounded p-2 text-xs flex flex-col justify-between shadow-md overflow-hidden cursor-default transition-transform hover:scale-[1.01]"
                     >
                       <div className="flex justify-between items-start">
@@ -353,22 +343,18 @@ const EventGrid = () => {
               {isDragging && dragRoom === room && (
                 <div 
                   className="absolute left-1 right-1 bg-blue-500/90 border-l-4 border-blue-700 rounded p-2 z-50 pointer-events-none shadow-xl text-white"
-                  style={{
-                    top: `${(dragStartMin - dayStartMinutes) * PX_PER_MIN}px`,
-                    height: `${(dragCurrentMin - dragStartMin) * PX_PER_MIN}px`
-                  }}
+                  style={{ top: `${(dragStartMin - dayStartMinutes) * PX_PER_MIN}px`, height: `${(dragCurrentMin - dragStartMin) * PX_PER_MIN}px` }}
                 >
                    <div className="font-bold text-sm">New Session</div>
                    <div className="text-xs opacity-90">{formatDuration(dragCurrentMin - dragStartMin)}</div>
                 </div>
               )}
-
             </div>
           ))}
         </div>
       </main>
 
-      {/* Creation Modal */}
+      {/* Add Session Modal */}
       {modalOpen && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-6">
@@ -378,7 +364,7 @@ const EventGrid = () => {
               <span className="font-bold ml-2">({formatDuration(dragCurrentMin - dragStartMin)})</span>
             </div>
             <input autoFocus className="w-full mb-3 p-2 border rounded" placeholder="Title" value={tempData.title} onChange={e => setTempData({...tempData, title: e.target.value})} />
-            <input className="w-full mb-4 p-2 border rounded" placeholder="Host Name (Sets Color)" value={tempData.host} onChange={e => setTempData({...tempData, host: e.target.value})} />
+            <input className="w-full mb-4 p-2 border rounded" placeholder="Host Name" value={tempData.host} onChange={e => setTempData({...tempData, host: e.target.value})} />
             <div className="flex gap-2">
               <button onClick={saveSession} className="flex-1 bg-slate-900 text-white py-2 rounded">Save</button>
               <button onClick={() => setModalOpen(false)} className="flex-1 bg-slate-100 py-2 rounded">Cancel</button>
@@ -387,52 +373,42 @@ const EventGrid = () => {
         </div>
       )}
 
-      {/* Settings Modal */}
+      {/* Settings Modal - CRASH PROOF */}
       {showSettings && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between mb-6 items-center border-b pb-2">
-              <h3 className="font-bold text-lg">Event Settings</h3>
+              <h3 className="font-bold text-lg">Settings</h3>
               <button onClick={() => setShowSettings(false)}><X size={20}/></button>
             </div>
 
-            {/* Section 1: Duration */}
             <div className="mb-8">
-              <h4 className="text-sm font-bold text-slate-500 uppercase mb-2">Event Duration</h4>
+              <h4 className="text-sm font-bold text-slate-500 uppercase mb-2">Duration</h4>
               <div className="flex gap-2 items-end">
                 <div className="flex-1">
                   <label className="text-xs text-slate-400 block mb-1">End Date</label>
                   <input type="date" className="w-full p-2 border rounded" 
-                    value={newEndDate || ""} onChange={e => setNewEndDate(e.target.value)} />
+                    value={newEndDate} onChange={e => setNewEndDate(e.target.value)} />
                 </div>
-                <button onClick={handleUpdateEndDate} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 h-[42px]">
-                  Update
-                </button>
+                <button onClick={handleUpdateEndDate} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 h-[42px]">Update</button>
               </div>
             </div>
             
-            {/* Section 2: Rooms */}
             <div>
               <h4 className="text-sm font-bold text-slate-500 uppercase mb-2">Rooms</h4>
               <div className="space-y-2 mb-4">
                 {safeRooms.map((r, i) => (
                   <div key={i} className="flex justify-between items-center bg-slate-50 p-2 rounded border">
                     <span className="text-sm font-medium">{r}</span>
-                    <button onClick={() => handleDeleteRoom(r)} className="text-slate-400 hover:text-red-500 p-1">
-                      <Trash2 size={16}/>
-                    </button>
+                    <button onClick={() => handleDeleteRoom(r)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={16}/></button>
                   </div>
                 ))}
               </div>
               <div className="flex gap-2">
-                <input className="flex-1 p-2 border rounded text-sm" placeholder="New Room Name" 
-                  value={newRoomName} onChange={e => setNewRoomName(e.target.value)} />
-                <button onClick={handleAddRoom} className="bg-green-600 text-white px-4 rounded hover:bg-green-700">
-                  <Plus size={20}/>
-                </button>
+                <input className="flex-1 p-2 border rounded text-sm" placeholder="New Room" value={newRoomName} onChange={e => setNewRoomName(e.target.value)} />
+                <button onClick={handleAddRoom} className="bg-green-600 text-white px-4 rounded hover:bg-green-700"><Plus size={20}/></button>
               </div>
             </div>
-
           </div>
         </div>
       )}
