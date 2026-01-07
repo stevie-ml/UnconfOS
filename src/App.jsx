@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { BrowserRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useNavigate, useParams, Navigate } from 'react-router-dom';
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, push, onValue, update, set, remove } from "firebase/database";
 import { Users, Settings, Trash2, Share2, Calendar, X, Check, Clock, Plus, AlertCircle } from 'lucide-react';
 
-// --- THE EXACT ID FROM YOUR WHATSAPP SCREENSHOT ---
-const HARDCODED_EVENT_ID = "-OilgSFBkcnwwcP14ZJS"; 
+// --- YOUR EVENT ID ---
+// Updated to match the link you sent: -OiIgSFBkcnwwcP14ZJS
+const HARDCODED_EVENT_ID = "-OiIgSFBkcnwwcP14ZJS"; 
 
 // --- CONFIGURATION ---
 const firebaseConfig = {
@@ -71,7 +72,6 @@ const generateDateRange = (startStr, endStr) => {
   const dates = [];
   let current = new Date(startStr + "T12:00:00");
   const end = new Date(endStr + "T12:00:00");
-  
   let safety = 0;
   while (current <= end && safety < 30) {
     dates.push(current.toDateString());
@@ -87,6 +87,8 @@ const safeKey = (str) => str.replace(/[.#$[\]]/g, "");
 
 const EventGrid = () => {
   const params = useParams();
+  const navigate = useNavigate();
+  // 1. Trust URL param first. 2. Fallback to hardcoded.
   const eventId = params.eventId || HARDCODED_EVENT_ID;
 
   const [eventData, setEventData] = useState(null);
@@ -127,7 +129,7 @@ const EventGrid = () => {
         setNewStartDate(data.config.startDate || "");
         setNewEndDate(data.config.endDate || "");
       } else {
-        setEventData(null); // No data found
+        setEventData(null); 
       }
     });
     return () => unsubscribe();
@@ -184,10 +186,9 @@ const EventGrid = () => {
     setModalOpen(false);
   };
 
-  // --- ROBUST DELETE FUNCTION ---
+  // --- DELETE FIX ---
   const handleDeleteSession = (key) => {
     if(window.confirm("Delete this session?")) {
-      // Use standard Firebase remove()
       const sessionRef = ref(db, `events/${eventId}/schedule/${key}`);
       remove(sessionRef).catch(err => alert("Error deleting: " + err.message));
     }
@@ -223,17 +224,43 @@ const EventGrid = () => {
     }
   };
 
-  if (!eventId) return <div className="p-10 text-center font-bold text-red-600">Please paste your Event ID into the code!</div>;
+  // --- CREATE NEW EVENT (Fallback) ---
+  const createNewEvent = async () => {
+    const eventsRef = ref(db, 'events');
+    const newRef = await push(eventsRef, {
+      config: {
+        name: "New Unconference",
+        startDate: new Date().toISOString().split('T')[0],
+        endDate: new Date(Date.now() + 86400000).toISOString().split('T')[0],
+        rooms: ["Main Hall"],
+        startHour: 8,
+        endHour: 24
+      },
+      schedule: {}
+    });
+    // Force browser to go to new event
+    window.location.href = `/event/${newRef.key}`;
+  };
+
+  if (!eventId) return <div className="p-10 text-center font-bold text-red-600">No Event ID</div>;
   
   if (loading) return <div className="p-10 text-center animate-pulse">Loading Schedule...</div>;
   
-  // New Error Screen if ID is wrong
+  // ERROR SCREEN WITH "CREATE NEW" BUTTON
   if (!eventData) return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center">
-      <AlertCircle size={48} className="text-red-500 mb-4"/>
-      <h1 className="text-2xl font-bold mb-2">Event Not Found</h1>
-      <p className="text-slate-600 mb-4">Could not find data for ID: <span className="font-mono bg-slate-100 p-1 rounded">{eventId}</span></p>
-      <button onClick={() => window.location.href = '/'} className="text-blue-600 hover:underline">Go Home</button>
+    <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center bg-slate-50">
+      <div className="bg-white p-8 rounded-xl shadow-lg max-w-md w-full">
+        <AlertCircle size={48} className="text-red-500 mb-4 mx-auto"/>
+        <h1 className="text-2xl font-bold mb-2">Event Not Found</h1>
+        <p className="text-slate-600 mb-6 font-mono text-xs bg-slate-100 p-2 rounded break-all">{eventId}</p>
+        
+        <button 
+          onClick={createNewEvent}
+          className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold hover:bg-blue-700 transition flex items-center justify-center gap-2"
+        >
+          <Plus size={20}/> Create New Event
+        </button>
+      </div>
     </div>
   );
 
@@ -307,8 +334,6 @@ const EventGrid = () => {
                         <span className="font-bold leading-tight text-sm">{session.title}</span>
                         <div className="flex flex-col items-end gap-1">
                            <span className="bg-white/40 px-1 rounded text-[10px] font-bold">{formatDuration(session.duration || 60)}</span>
-                           
-                           {/* --- DELETE BUTTON with StopPropagation --- */}
                            <button 
                               onClick={(e) => {
                                 e.stopPropagation(); 
@@ -413,11 +438,15 @@ const EventGrid = () => {
   );
 };
 
+// --- APP SHELL ---
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<EventGrid />} />
+        {/* If user visits root, redirect to HARDCODED ID */}
+        <Route path="/" element={<Navigate to={`/event/${HARDCODED_EVENT_ID}`} replace />} />
+        
+        {/* Specific Event Grid */}
         <Route path="/event/:eventId" element={<EventGrid />} />
       </Routes>
     </BrowserRouter>
