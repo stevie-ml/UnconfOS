@@ -1,11 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { BrowserRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, push, onValue, update, set } from "firebase/database";
 import { Users, Settings, Trash2, Share2, Calendar, X, Check, Clock, Plus } from 'lucide-react';
 
-// --- PASTE YOUR EVENT ID HERE (OPTIONAL) ---
-// If you want the main URL to open your event directly, paste the ID inside the quotes.
+// --- PASTE YOUR EVENT ID HERE ---
 // Example: const HARDCODED_EVENT_ID = "-Oiv1obfnfcsDG8aZPq";
 const HARDCODED_EVENT_ID = "PASTE_YOUR_ID_HERE"; 
 
@@ -73,7 +72,6 @@ const generateDateRange = (startStr, endStr) => {
   const dates = [];
   let current = new Date(startStr + "T12:00:00");
   const end = new Date(endStr + "T12:00:00");
-  
   let safety = 0;
   while (current <= end && safety < 30) {
     dates.push(current.toDateString());
@@ -88,6 +86,7 @@ const safeKey = (str) => str.replace(/[.#$[\]]/g, "");
 // --- MAIN COMPONENT ---
 
 const EventGrid = () => {
+  // Use hardcoded ID if available, otherwise grab from URL
   const params = useParams();
   const eventId = HARDCODED_EVENT_ID !== "PASTE_YOUR_ID_HERE" ? HARDCODED_EVENT_ID : params.eventId;
 
@@ -131,6 +130,7 @@ const EventGrid = () => {
     return () => unsubscribe();
   }, [eventId]);
 
+  // SAFE ROOMS LIST
   const safeRooms = useMemo(() => {
     if (!eventData?.config?.rooms) return [];
     return Object.values(eventData.config.rooms).filter(r => r && typeof r === 'string');
@@ -182,10 +182,9 @@ const EventGrid = () => {
     setModalOpen(false);
   };
 
-  // --- FIX: Using set(..., null) instead of update ---
   const handleDeleteSession = (key) => {
     if(window.confirm("Delete this session?")) {
-      set(ref(db, `events/${eventId}/schedule/${key}`), null);
+      update(ref(db, `events/${eventId}/schedule/${key}`), null);
     }
   };
 
@@ -398,6 +397,7 @@ export default function App() {
       ) : (
          <Routes>
             <Route path="/event/:eventId" element={<EventGrid />} />
+            {/* Fallback to create page ONLY if no ID provided in code or URL */}
             <Route path="/" element={<div className="p-10 font-bold text-center">Config Mode: Go to /event/YOUR_ID or Paste ID in Code</div>} />
          </Routes>
       )}
