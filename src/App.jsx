@@ -4,8 +4,8 @@ import { initializeApp } from "firebase/app";
 import { getDatabase, ref, push, onValue, update, set, remove } from "firebase/database";
 import { Users, Settings, Trash2, Share2, Calendar, X, Check, Clock, Plus } from 'lucide-react';
 
-// --- PASTE YOUR EVENT ID HERE (OPTIONAL) ---
-const HARDCODED_EVENT_ID = "PASTE_YOUR_ID_HERE"; 
+// --- I HAVE ALREADY PASTED YOUR ID HERE ---
+const HARDCODED_EVENT_ID = "-OilgSFBkcnwwcP14ZJS"; 
 
 // --- CONFIGURATION ---
 const firebaseConfig = {
@@ -180,12 +180,11 @@ const EventGrid = () => {
     setModalOpen(false);
   };
 
-  // --- CHANGED: Explicit remove() call ---
+  // --- DELETE FIX ---
   const handleDeleteSession = (key) => {
     if(window.confirm("Delete this session?")) {
       const sessionRef = ref(db, `events/${eventId}/schedule/${key}`);
-      remove(sessionRef)
-        .catch(err => alert("Error deleting: " + err.message));
+      remove(sessionRef).catch(err => alert("Error deleting: " + err.message));
     }
   };
 
@@ -202,15 +201,13 @@ const EventGrid = () => {
   // SETTINGS
   const handleAddRoom = () => {
     if (!newRoomName) return;
-    set(ref(db, `events/${eventId}/config/rooms`), [...safeRooms, safeKey(newRoomName)])
-      .catch(err => alert("Error adding room: " + err.message));
+    set(ref(db, `events/${eventId}/config/rooms`), [...safeRooms, safeKey(newRoomName)]);
     setNewRoomName("");
   };
 
   const handleDeleteRoom = (r) => {
     if(window.confirm(`Delete room "${r}"?`)) {
-      set(ref(db, `events/${eventId}/config/rooms`), safeRooms.filter(room => room !== r))
-        .catch(err => alert("Error deleting room: " + err.message));
+      set(ref(db, `events/${eventId}/config/rooms`), safeRooms.filter(room => room !== r));
     }
   };
 
@@ -296,7 +293,7 @@ const EventGrid = () => {
                            <span className="bg-white/40 px-1 rounded text-[10px] font-bold">{formatDuration(session.duration || 60)}</span>
                            <button 
                               onClick={(e) => {
-                                e.stopPropagation(); // CRITICAL: Stop click from bubbling
+                                e.stopPropagation(); 
                                 handleDeleteSession(key);
                               }} 
                               className="hover:bg-red-500 hover:text-white p-0.5 rounded cursor-pointer pointer-events-auto"
@@ -401,8 +398,7 @@ const EventGrid = () => {
 export default function App() {
   return (
     <BrowserRouter>
-      {/* If ID is hardcoded, show Grid immediately. If not, check URL. */}
-      {HARDCODED_EVENT_ID !== "/event/-OiIgSFBkcnwwcP14ZJS" ? (
+      {HARDCODED_EVENT_ID !== "PASTE_YOUR_ID_HERE" ? (
          <EventGrid />
       ) : (
          <Routes>
