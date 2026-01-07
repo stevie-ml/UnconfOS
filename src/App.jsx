@@ -4,6 +4,11 @@ import { initializeApp } from "firebase/app";
 import { getDatabase, ref, push, onValue, update, set } from "firebase/database";
 import { Users, Settings, Trash2, Share2, Calendar, X, Check, Clock, Plus } from 'lucide-react';
 
+// --- PASTE YOUR EVENT ID HERE (OPTIONAL) ---
+// If you want the main URL to open your event directly, paste the ID inside the quotes.
+// Example: const HARDCODED_EVENT_ID = "-Oiv1obfnfcsDG8aZPq";
+const HARDCODED_EVENT_ID = "PASTE_YOUR_ID_HERE"; 
+
 // --- CONFIGURATION ---
 const firebaseConfig = {
   apiKey: "AIzaSyDC5uHKlOdIHCFWZNbNqIoTaxNLKF1ZsI",
@@ -80,43 +85,12 @@ const generateDateRange = (startStr, endStr) => {
 
 const safeKey = (str) => str.replace(/[.#$[\]]/g, "");
 
-// --- COMPONENTS ---
-
-const CreateEvent = () => {
-  const navigate = useNavigate();
-  const [formData, setFormData] = useState({ name: '', startDate: '', endDate: '', rooms: ['Main Hall', 'Dining Room'] });
-
-  const handleCreate = async (e) => {
-    e.preventDefault();
-    if (!formData.startDate || !formData.endDate) { alert("Please select dates"); return; }
-    const eventsRef = ref(db, 'events');
-    const newEventRef = await push(eventsRef, {
-      config: { ...formData, startHour: 8, endHour: 24 },
-      schedule: {}
-    });
-    navigate(`/event/${newEventRef.key}`);
-  };
-
-  return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-white rounded-xl shadow-lg p-8">
-        <h1 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2"><Calendar className="text-blue-600"/> UnconfOS v8.0</h1>
-        <form onSubmit={handleCreate} className="space-y-4">
-          <div><label className="block text-sm font-medium mb-1">Event Name</label><input required className="w-full p-2 border rounded" placeholder="e.g. Retreat" onChange={e => setFormData({...formData, name: e.target.value})} /></div>
-          <div className="grid grid-cols-2 gap-4">
-            <div><label className="block text-sm font-medium mb-1">Start</label><input required type="date" className="w-full p-2 border rounded" onChange={e => setFormData({...formData, startDate: e.target.value})} /></div>
-            <div><label className="block text-sm font-medium mb-1">End</label><input required type="date" className="w-full p-2 border rounded" onChange={e => setFormData({...formData, endDate: e.target.value})} /></div>
-          </div>
-          <div><label className="block text-sm font-medium mb-1">Rooms</label><input className="w-full p-2 border rounded" placeholder="Main Hall, Garden..." value={formData.rooms.join(', ')} onChange={e => setFormData({...formData, rooms: e.target.value.split(',').map(s => s.trim())})} /></div>
-          <button className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold">Create Event Grid</button>
-        </form>
-      </div>
-    </div>
-  );
-};
+// --- MAIN COMPONENT ---
 
 const EventGrid = () => {
-  const { eventId } = useParams();
+  const params = useParams();
+  const eventId = HARDCODED_EVENT_ID !== "PASTE_YOUR_ID_HERE" ? HARDCODED_EVENT_ID : params.eventId;
+
   const [eventData, setEventData] = useState(null);
   const [dates, setDates] = useState([]);
   const [selectedDay, setSelectedDay] = useState("");
@@ -139,6 +113,7 @@ const EventGrid = () => {
   const [myRSVPs, setMyRSVPs] = useState({});
 
   useEffect(() => {
+    if (!eventId) return;
     const saved = localStorage.getItem(`rsvps_${eventId}`);
     if (saved) setMyRSVPs(JSON.parse(saved));
     
@@ -149,7 +124,6 @@ const EventGrid = () => {
         const d = generateDateRange(data.config.startDate, data.config.endDate);
         setDates(d);
         if (!selectedDay && d.length > 0) setSelectedDay(d[0]);
-        // Init settings inputs
         setNewStartDate(data.config.startDate || "");
         setNewEndDate(data.config.endDate || "");
       }
@@ -159,8 +133,7 @@ const EventGrid = () => {
 
   const safeRooms = useMemo(() => {
     if (!eventData?.config?.rooms) return [];
-    const rooms = Object.values(eventData.config.rooms);
-    return rooms.filter(r => r && typeof r === 'string');
+    return Object.values(eventData.config.rooms).filter(r => r && typeof r === 'string');
   }, [eventData]);
 
   const startHour = eventData?.config?.startHour || 8;
@@ -168,6 +141,7 @@ const EventGrid = () => {
   const dayStartMinutes = startHour * 60;
   const totalHeight = (endHour - startHour) * 60 * PX_PER_MIN;
 
+  // ACTIONS
   const handleCanvasMouseDown = (e, room) => {
     if (e.button !== 0) return;
     const rect = e.currentTarget.getBoundingClientRect();
@@ -208,9 +182,10 @@ const EventGrid = () => {
     setModalOpen(false);
   };
 
+  // --- FIX: Using set(..., null) instead of update ---
   const handleDeleteSession = (key) => {
     if(window.confirm("Delete this session?")) {
-      update(ref(db, `events/${eventId}/schedule/${key}`), null);
+      set(ref(db, `events/${eventId}/schedule/${key}`), null);
     }
   };
 
@@ -224,33 +199,28 @@ const EventGrid = () => {
     localStorage.setItem(`rsvps_${eventId}`, JSON.stringify(newLocal));
   };
 
-  // --- FIXED SETTINGS HANDLERS (USING SET INSTEAD OF UPDATE) ---
+  // SETTINGS
   const handleAddRoom = () => {
     if (!newRoomName) return;
-    const newRoomsList = [...safeRooms, safeKey(newRoomName)];
-    // "set" completely overwrites the node, guaranteeing the array structure
-    set(ref(db, `events/${eventId}/config/rooms`), newRoomsList);
+    set(ref(db, `events/${eventId}/config/rooms`), [...safeRooms, safeKey(newRoomName)]);
     setNewRoomName("");
   };
 
   const handleDeleteRoom = (r) => {
     if(window.confirm(`Delete room "${r}"?`)) {
-      const newRoomsList = safeRooms.filter(room => room !== r);
-      set(ref(db, `events/${eventId}/config/rooms`), newRoomsList);
+      set(ref(db, `events/${eventId}/config/rooms`), safeRooms.filter(room => room !== r));
     }
   };
 
   const handleUpdateDates = () => {
     if(newStartDate && newEndDate) {
-      update(ref(db, `events/${eventId}/config`), { 
-        startDate: newStartDate,
-        endDate: newEndDate 
-      });
+      update(ref(db, `events/${eventId}/config`), { startDate: newStartDate, endDate: newEndDate });
       alert("Dates updated!");
     }
   };
 
-  if (!eventData) return <div className="p-10 text-center">Loading...</div>;
+  if (!eventId) return <div className="p-10 text-center font-bold text-red-600">Please paste your Event ID into the code!</div>;
+  if (!eventData) return <div className="p-10 text-center animate-pulse">Loading Schedule...</div>;
 
   const hourMarkers = [];
   for (let h = startHour; h < endHour; h++) hourMarkers.push(h);
@@ -258,19 +228,19 @@ const EventGrid = () => {
   return (
     <div className="min-h-screen bg-white text-slate-900 font-sans flex flex-col h-screen overflow-hidden" onMouseUp={handleMouseUp}>
       <header className="bg-white border-b z-50 px-4 py-3 shadow-sm flex-none flex justify-between items-center">
-        <div>
-          <h1 className="text-xl font-bold">{eventData.config.name}</h1>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-xl font-bold truncate">{eventData.config.name}</h1>
           <div className="flex gap-2 mt-1 overflow-x-auto no-scrollbar">
             {dates.map(day => (
-              <button key={day} onClick={() => setSelectedDay(day)} className={`px-2 py-1 rounded text-xs font-bold transition-colors ${selectedDay === day ? 'bg-slate-800 text-white' : 'bg-slate-100 hover:bg-slate-200'}`}>
+              <button key={day} onClick={() => setSelectedDay(day)} className={`px-2 py-1 rounded text-xs font-bold transition-colors whitespace-nowrap ${selectedDay === day ? 'bg-slate-800 text-white' : 'bg-slate-100 hover:bg-slate-200'}`}>
                 {day.split(' ').slice(0, 3).join(' ')}
               </button>
             ))}
           </div>
         </div>
-        <div className="flex gap-2">
-          <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-slate-100 rounded"><Settings size={20}/></button>
-          <button onClick={() => navigator.clipboard.writeText(window.location.href)} className="p-2 bg-blue-600 text-white rounded hover:bg-blue-700"><Share2 size={20}/></button>
+        <div className="flex gap-2 ml-4">
+          <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-slate-100 rounded text-slate-500"><Settings size={20}/></button>
+          <button onClick={() => navigator.clipboard.writeText(window.location.href)} className="p-2 bg-blue-600 text-white rounded hover:bg-blue-700 shadow"><Share2 size={20}/></button>
         </div>
       </header>
 
@@ -418,13 +388,19 @@ const EventGrid = () => {
   );
 };
 
+// --- APP SHELL ---
 export default function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<CreateEvent />} />
-        <Route path="/event/:eventId" element={<EventGrid />} />
-      </Routes>
+      {/* If ID is hardcoded, show Grid immediately. If not, check URL. */}
+      {HARDCODED_EVENT_ID !== "PASTE_YOUR_ID_HERE" ? (
+         <EventGrid />
+      ) : (
+         <Routes>
+            <Route path="/event/:eventId" element={<EventGrid />} />
+            <Route path="/" element={<div className="p-10 font-bold text-center">Config Mode: Go to /event/YOUR_ID or Paste ID in Code</div>} />
+         </Routes>
+      )}
     </BrowserRouter>
   );
 }
