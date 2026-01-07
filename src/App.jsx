@@ -402,7 +402,7 @@ export default function App() {
   return (
     <BrowserRouter>
       {/* If ID is hardcoded, show Grid immediately. If not, check URL. */}
-      {HARDCODED_EVENT_ID !== "PASTE_YOUR_ID_HERE" ? (
+      {HARDCODED_EVENT_ID !== "-OilgSFBkcnwwcP14ZJS" ? (
          <EventGrid />
       ) : (
          <Routes>
