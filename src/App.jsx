@@ -4,8 +4,8 @@ import { initializeApp } from "firebase/app";
 import { getDatabase, ref, push, onValue, update, set, remove } from "firebase/database";
 import { Users, Settings, Trash2, Share2, Calendar, X, Check, Clock, Plus, AlertCircle } from 'lucide-react';
 
-// --- CORRECT EVENT ID FROM YOUR SCREENSHOT ---
-const HARDCODED_EVENT_ID = "-OileApGGBI87-MQWCGa"; 
+// --- THE EXACT ID FROM YOUR WHATSAPP SCREENSHOT ---
+const HARDCODED_EVENT_ID = "-OilgSFBkcnwwcP14ZJS"; 
 
 // --- CONFIGURATION ---
 const firebaseConfig = {
@@ -87,7 +87,6 @@ const safeKey = (str) => str.replace(/[.#$[\]]/g, "");
 
 const EventGrid = () => {
   const params = useParams();
-  // Prioritize URL param, then hardcoded ID
   const eventId = params.eventId || HARDCODED_EVENT_ID;
 
   const [eventData, setEventData] = useState(null);
@@ -118,7 +117,7 @@ const EventGrid = () => {
     if (saved) setMyRSVPs(JSON.parse(saved));
     
     const unsubscribe = onValue(ref(db, `events/${eventId}`), (snapshot) => {
-      setLoading(false); // Data loaded (even if null)
+      setLoading(false);
       const data = snapshot.val();
       if (data && data.config) {
         setEventData(data);
@@ -128,7 +127,7 @@ const EventGrid = () => {
         setNewStartDate(data.config.startDate || "");
         setNewEndDate(data.config.endDate || "");
       } else {
-        setEventData(null);
+        setEventData(null); // No data found
       }
     });
     return () => unsubscribe();
@@ -185,9 +184,10 @@ const EventGrid = () => {
     setModalOpen(false);
   };
 
-  // --- DELETE FIX ---
+  // --- ROBUST DELETE FUNCTION ---
   const handleDeleteSession = (key) => {
     if(window.confirm("Delete this session?")) {
+      // Use standard Firebase remove()
       const sessionRef = ref(db, `events/${eventId}/schedule/${key}`);
       remove(sessionRef).catch(err => alert("Error deleting: " + err.message));
     }
@@ -224,15 +224,16 @@ const EventGrid = () => {
   };
 
   if (!eventId) return <div className="p-10 text-center font-bold text-red-600">Please paste your Event ID into the code!</div>;
+  
   if (loading) return <div className="p-10 text-center animate-pulse">Loading Schedule...</div>;
   
-  // Show error if loaded but no data found
+  // New Error Screen if ID is wrong
   if (!eventData) return (
     <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center">
       <AlertCircle size={48} className="text-red-500 mb-4"/>
       <h1 className="text-2xl font-bold mb-2">Event Not Found</h1>
       <p className="text-slate-600 mb-4">Could not find data for ID: <span className="font-mono bg-slate-100 p-1 rounded">{eventId}</span></p>
-      <p className="text-sm text-slate-500">Check the hardcoded ID in App.jsx</p>
+      <button onClick={() => window.location.href = '/'} className="text-blue-600 hover:underline">Go Home</button>
     </div>
   );
 
@@ -306,6 +307,8 @@ const EventGrid = () => {
                         <span className="font-bold leading-tight text-sm">{session.title}</span>
                         <div className="flex flex-col items-end gap-1">
                            <span className="bg-white/40 px-1 rounded text-[10px] font-bold">{formatDuration(session.duration || 60)}</span>
+                           
+                           {/* --- DELETE BUTTON with StopPropagation --- */}
                            <button 
                               onClick={(e) => {
                                 e.stopPropagation(); 
