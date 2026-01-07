@@ -1,12 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate, useParams, Navigate } from 'react-router-dom';
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, push, onValue, update, set, remove } from "firebase/database";
+import { getDatabase, ref, onValue, update, set, remove } from "firebase/database";
 import { Users, Settings, Trash2, Share2, Calendar, X, Check, Clock, Plus, AlertCircle } from 'lucide-react';
-
-// --- YOUR EVENT ID ---
-// Updated to match the link you sent: -OiIgSFBkcnwwcP14ZJS
-const HARDCODED_EVENT_ID = "-OiIgSFBkcnwwcP14ZJS"; 
 
 // --- CONFIGURATION ---
 const firebaseConfig = {
@@ -22,6 +18,9 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
+
+// --- YOUR SPECIFIC EVENT ID ---
+const MAIN_EVENT_ID = "-OiIgSFBkcnwwcP14ZJS";
 
 // --- CONSTANTS ---
 const PX_PER_MIN = 3; 
@@ -49,15 +48,15 @@ const formatDuration = (mins) => {
 };
 
 const COLORS = [
-  { bg: '#fecaca', border: '#b91c1c', text: '#7f1d1d' }, // Red
-  { bg: '#fed7aa', border: '#c2410c', text: '#7c2d12' }, // Orange
-  { bg: '#fde68a', border: '#b45309', text: '#78350f' }, // Amber
-  { bg: '#bbf7d0', border: '#15803d', text: '#14532d' }, // Green
-  { bg: '#bfdbfe', border: '#1d4ed8', text: '#1e3a8a' }, // Blue
-  { bg: '#ddd6fe', border: '#6d28d9', text: '#5b21b6' }, // Violet
-  { bg: '#f5d0fe', border: '#c026d3', text: '#701a75' }, // Fuchsia
-  { bg: '#fbcfe8', border: '#be185d', text: '#831843' }, // Pink
-  { bg: '#99f6e4', border: '#0f766e', text: '#134e4a' }, // Teal
+  { bg: '#fecaca', border: '#b91c1c', text: '#7f1d1d' }, 
+  { bg: '#fed7aa', border: '#c2410c', text: '#7c2d12' }, 
+  { bg: '#fde68a', border: '#b45309', text: '#78350f' }, 
+  { bg: '#bbf7d0', border: '#15803d', text: '#14532d' }, 
+  { bg: '#bfdbfe', border: '#1d4ed8', text: '#1e3a8a' }, 
+  { bg: '#ddd6fe', border: '#6d28d9', text: '#5b21b6' }, 
+  { bg: '#f5d0fe', border: '#c026d3', text: '#701a75' }, 
+  { bg: '#fbcfe8', border: '#be185d', text: '#831843' }, 
+  { bg: '#99f6e4', border: '#0f766e', text: '#134e4a' }, 
 ];
 
 const getHostColor = (name) => {
@@ -83,14 +82,10 @@ const generateDateRange = (startStr, endStr) => {
 
 const safeKey = (str) => str.replace(/[.#$[\]]/g, "");
 
-// --- MAIN COMPONENT ---
+// --- EVENT GRID COMPONENT ---
 
 const EventGrid = () => {
-  const params = useParams();
-  const navigate = useNavigate();
-  // 1. Trust URL param first. 2. Fallback to hardcoded.
-  const eventId = params.eventId || HARDCODED_EVENT_ID;
-
+  const { eventId } = useParams(); // Purely rely on Router
   const [eventData, setEventData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [dates, setDates] = useState([]);
@@ -104,17 +99,13 @@ const EventGrid = () => {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [tempData, setTempData] = useState({ title: "", host: "" });
-  
-  // Settings State
   const [showSettings, setShowSettings] = useState(false);
   const [newRoomName, setNewRoomName] = useState("");
   const [newStartDate, setNewStartDate] = useState("");
   const [newEndDate, setNewEndDate] = useState("");
-  
   const [myRSVPs, setMyRSVPs] = useState({});
 
   useEffect(() => {
-    if (!eventId) return;
     const saved = localStorage.getItem(`rsvps_${eventId}`);
     if (saved) setMyRSVPs(JSON.parse(saved));
     
@@ -129,7 +120,7 @@ const EventGrid = () => {
         setNewStartDate(data.config.startDate || "");
         setNewEndDate(data.config.endDate || "");
       } else {
-        setEventData(null); 
+        setEventData(null);
       }
     });
     return () => unsubscribe();
@@ -186,11 +177,10 @@ const EventGrid = () => {
     setModalOpen(false);
   };
 
-  // --- DELETE FIX ---
   const handleDeleteSession = (key) => {
     if(window.confirm("Delete this session?")) {
-      const sessionRef = ref(db, `events/${eventId}/schedule/${key}`);
-      remove(sessionRef).catch(err => alert("Error deleting: " + err.message));
+      remove(ref(db, `events/${eventId}/schedule/${key}`))
+        .catch(err => alert(err.message));
     }
   };
 
@@ -224,43 +214,12 @@ const EventGrid = () => {
     }
   };
 
-  // --- CREATE NEW EVENT (Fallback) ---
-  const createNewEvent = async () => {
-    const eventsRef = ref(db, 'events');
-    const newRef = await push(eventsRef, {
-      config: {
-        name: "New Unconference",
-        startDate: new Date().toISOString().split('T')[0],
-        endDate: new Date(Date.now() + 86400000).toISOString().split('T')[0],
-        rooms: ["Main Hall"],
-        startHour: 8,
-        endHour: 24
-      },
-      schedule: {}
-    });
-    // Force browser to go to new event
-    window.location.href = `/event/${newRef.key}`;
-  };
-
-  if (!eventId) return <div className="p-10 text-center font-bold text-red-600">No Event ID</div>;
-  
   if (loading) return <div className="p-10 text-center animate-pulse">Loading Schedule...</div>;
-  
-  // ERROR SCREEN WITH "CREATE NEW" BUTTON
   if (!eventData) return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center bg-slate-50">
-      <div className="bg-white p-8 rounded-xl shadow-lg max-w-md w-full">
-        <AlertCircle size={48} className="text-red-500 mb-4 mx-auto"/>
-        <h1 className="text-2xl font-bold mb-2">Event Not Found</h1>
-        <p className="text-slate-600 mb-6 font-mono text-xs bg-slate-100 p-2 rounded break-all">{eventId}</p>
-        
-        <button 
-          onClick={createNewEvent}
-          className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold hover:bg-blue-700 transition flex items-center justify-center gap-2"
-        >
-          <Plus size={20}/> Create New Event
-        </button>
-      </div>
+    <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center">
+      <AlertCircle size={48} className="text-red-500 mb-4"/>
+      <h1 className="text-2xl font-bold mb-2">Event Not Found</h1>
+      <p className="text-slate-600 mb-4 font-mono bg-slate-100 p-1">{eventId}</p>
     </div>
   );
 
@@ -286,7 +245,6 @@ const EventGrid = () => {
         </div>
       </header>
 
-      {/* Main Grid */}
       <main className="flex-1 overflow-auto flex relative bg-white select-none">
         <div className="sticky left-0 bg-white z-20 border-r w-14 flex-none" style={{ height: totalHeight }}>
           {hourMarkers.map(h => (
@@ -327,21 +285,31 @@ const EventGrid = () => {
                     <div 
                       key={key}
                       onMouseDown={(e) => e.stopPropagation()} 
-                      style={{ top: `${top}px`, height: `${Math.max(height, 30)}px`, backgroundColor: styles.bg, borderColor: styles.border, color: styles.text, zIndex: 10 }}
+                      style={{ 
+                        top: `${top}px`, 
+                        height: `${Math.max(height, 30)}px`, 
+                        backgroundColor: styles.bg, 
+                        borderColor: styles.border, 
+                        color: styles.text, 
+                        zIndex: 50 // HIGH Z-INDEX TO ENSURE CLICKS
+                      }}
                       className="absolute left-1 right-1 border-l-4 rounded p-2 text-xs flex flex-col justify-between shadow-md overflow-hidden cursor-default transition-transform hover:scale-[1.01]"
                     >
                       <div className="flex justify-between items-start">
                         <span className="font-bold leading-tight text-sm">{session.title}</span>
                         <div className="flex flex-col items-end gap-1">
                            <span className="bg-white/40 px-1 rounded text-[10px] font-bold">{formatDuration(session.duration || 60)}</span>
+                           {/* --- DELETE BUTTON --- */}
                            <button 
+                              onMouseDown={(e) => e.stopPropagation()} // Prevent drag start
                               onClick={(e) => {
                                 e.stopPropagation(); 
+                                e.preventDefault();
                                 handleDeleteSession(key);
                               }} 
-                              className="hover:bg-red-500 hover:text-white p-0.5 rounded cursor-pointer pointer-events-auto"
+                              className="hover:bg-red-500 hover:text-white p-1 rounded cursor-pointer z-50 bg-white/50"
                            >
-                             <Trash2 size={12}/>
+                             <Trash2 size={14}/>
                            </button>
                         </div>
                       </div>
@@ -373,6 +341,7 @@ const EventGrid = () => {
         </div>
       </main>
 
+      {/* MODALS (Same as before) */}
       {modalOpen && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-6">
@@ -398,24 +367,14 @@ const EventGrid = () => {
               <h3 className="font-bold text-lg">Settings</h3>
               <button onClick={() => setShowSettings(false)}><X size={20}/></button>
             </div>
-
             <div className="mb-8">
               <h4 className="text-sm font-bold text-slate-500 uppercase mb-2">Duration</h4>
               <div className="flex gap-2 items-end mb-2">
-                <div className="flex-1">
-                  <label className="text-xs text-slate-400 block mb-1">Start Date</label>
-                  <input type="date" className="w-full p-2 border rounded" 
-                    value={newStartDate} onChange={e => setNewStartDate(e.target.value)} />
-                </div>
-                <div className="flex-1">
-                  <label className="text-xs text-slate-400 block mb-1">End Date</label>
-                  <input type="date" className="w-full p-2 border rounded" 
-                    value={newEndDate} onChange={e => setNewEndDate(e.target.value)} />
-                </div>
+                <div className="flex-1"><label className="text-xs text-slate-400 block mb-1">Start Date</label><input type="date" className="w-full p-2 border rounded" value={newStartDate} onChange={e => setNewStartDate(e.target.value)} /></div>
+                <div className="flex-1"><label className="text-xs text-slate-400 block mb-1">End Date</label><input type="date" className="w-full p-2 border rounded" value={newEndDate} onChange={e => setNewEndDate(e.target.value)} /></div>
               </div>
               <button onClick={handleUpdateDates} className="w-full bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Update Dates</button>
             </div>
-            
             <div>
               <h4 className="text-sm font-bold text-slate-500 uppercase mb-2">Rooms</h4>
               <div className="space-y-2 mb-4">
@@ -438,15 +397,13 @@ const EventGrid = () => {
   );
 };
 
-// --- APP SHELL ---
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* If user visits root, redirect to HARDCODED ID */}
-        <Route path="/" element={<Navigate to={`/event/${HARDCODED_EVENT_ID}`} replace />} />
-        
-        {/* Specific Event Grid */}
+        {/* Redirect root to your main event */}
+        <Route path="/" element={<Navigate to={`/event/${MAIN_EVENT_ID}`} replace />} />
+        {/* Handle specific events */}
         <Route path="/event/:eventId" element={<EventGrid />} />
       </Routes>
     </BrowserRouter>
