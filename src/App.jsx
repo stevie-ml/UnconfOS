@@ -2,10 +2,10 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom';
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, push, onValue, update, set, remove } from "firebase/database";
-import { Users, Settings, Trash2, Share2, Calendar, X, Check, Clock, Plus } from 'lucide-react';
+import { Users, Settings, Trash2, Share2, Calendar, X, Check, Clock, Plus, AlertCircle } from 'lucide-react';
 
-// --- I HAVE ALREADY PASTED YOUR ID HERE ---
-const HARDCODED_EVENT_ID = "-OilgSFBkcnwwcP14ZJS"; 
+// --- CORRECT EVENT ID FROM YOUR SCREENSHOT ---
+const HARDCODED_EVENT_ID = "-OileApGGBI87-MQWCGa"; 
 
 // --- CONFIGURATION ---
 const firebaseConfig = {
@@ -87,9 +87,11 @@ const safeKey = (str) => str.replace(/[.#$[\]]/g, "");
 
 const EventGrid = () => {
   const params = useParams();
-  const eventId = HARDCODED_EVENT_ID !== "PASTE_YOUR_ID_HERE" ? HARDCODED_EVENT_ID : params.eventId;
+  // Prioritize URL param, then hardcoded ID
+  const eventId = params.eventId || HARDCODED_EVENT_ID;
 
   const [eventData, setEventData] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [dates, setDates] = useState([]);
   const [selectedDay, setSelectedDay] = useState("");
   
@@ -116,6 +118,7 @@ const EventGrid = () => {
     if (saved) setMyRSVPs(JSON.parse(saved));
     
     const unsubscribe = onValue(ref(db, `events/${eventId}`), (snapshot) => {
+      setLoading(false); // Data loaded (even if null)
       const data = snapshot.val();
       if (data && data.config) {
         setEventData(data);
@@ -124,6 +127,8 @@ const EventGrid = () => {
         if (!selectedDay && d.length > 0) setSelectedDay(d[0]);
         setNewStartDate(data.config.startDate || "");
         setNewEndDate(data.config.endDate || "");
+      } else {
+        setEventData(null);
       }
     });
     return () => unsubscribe();
@@ -219,7 +224,17 @@ const EventGrid = () => {
   };
 
   if (!eventId) return <div className="p-10 text-center font-bold text-red-600">Please paste your Event ID into the code!</div>;
-  if (!eventData) return <div className="p-10 text-center animate-pulse">Loading Schedule...</div>;
+  if (loading) return <div className="p-10 text-center animate-pulse">Loading Schedule...</div>;
+  
+  // Show error if loaded but no data found
+  if (!eventData) return (
+    <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center">
+      <AlertCircle size={48} className="text-red-500 mb-4"/>
+      <h1 className="text-2xl font-bold mb-2">Event Not Found</h1>
+      <p className="text-slate-600 mb-4">Could not find data for ID: <span className="font-mono bg-slate-100 p-1 rounded">{eventId}</span></p>
+      <p className="text-sm text-slate-500">Check the hardcoded ID in App.jsx</p>
+    </div>
+  );
 
   const hourMarkers = [];
   for (let h = startHour; h < endHour; h++) hourMarkers.push(h);
@@ -398,14 +413,10 @@ const EventGrid = () => {
 export default function App() {
   return (
     <BrowserRouter>
-      {HARDCODED_EVENT_ID !== "PASTE_YOUR_ID_HERE" ? (
-         <EventGrid />
-      ) : (
-         <Routes>
-            <Route path="/event/:eventId" element={<EventGrid />} />
-            <Route path="/" element={<div className="p-10 font-bold text-center">Config Mode: Go to /event/YOUR_ID or Paste ID in Code</div>} />
-         </Routes>
-      )}
+      <Routes>
+        <Route path="/" element={<EventGrid />} />
+        <Route path="/event/:eventId" element={<EventGrid />} />
+      </Routes>
     </BrowserRouter>
   );
 }
